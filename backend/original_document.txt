@@ -1,0 +1,10 @@
+This is a secret document for testing secure file transfer.
+    
+Important Information:
+- Account Number: 123456789
+- Password: MySecurePass123
+- Secret Code: 42-84-126
+- Notes: This should be encrypted end-to-end!
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. 
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.

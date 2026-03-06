@@ -1,0 +1,30 @@
+
+## **3. `backend/requirements.txt`**
+```txt
+# Core
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+Flask-CORS==4.0.0
+Flask-JWT-Extended==4.5.3
+
+# Security
+cryptography==41.0.7
+bcrypt==4.0.1
+python-dotenv==1.0.0
+
+# Database
+mysql-connector-python==8.1.0
+# Alternative: pymysql==1.1.0
+
+# Utilities
+python-dateutil==2.8.2
+werkzeug==2.3.7
+
+# Development (optional)
+pytest==7.4.3
+black==23.11.0
+flake8==6.1.0
+
+#email
+jinja2==3.1.2
+email-validator==2.0.0
