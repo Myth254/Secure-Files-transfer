@@ -1,0 +1,76 @@
+<!-- ═══════════════════════════════════════════════════
+     PAGE: MY FILES
+     Loaded by: js/loader.js → #pagFiles
+════════════════════════════════════════════════════ -->
+<div id="pagFiles">
+
+  <div class="page-header">
+    <div class="page-header-left">
+      <h2>My Files</h2>
+      <p>Encrypted and stored securely</p>
+    </div>
+    <button class="btn btn-primary" onclick="openUploadModal()">
+      ⬆ Upload File
+    </button>
+  </div>
+
+  <!-- Stats row -->
+  <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
+    <div class="stat-card">
+      <div class="stat-icon blue">📁</div>
+      <div class="stat-value" id="statTotalFiles">—</div>
+      <div class="stat-label">Total Files</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon green">💾</div>
+      <div class="stat-value" id="statStorageUsed">—</div>
+      <div class="stat-label">Storage Used</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon amber">⬆</div>
+      <div class="stat-value" id="statRecentUploads">—</div>
+      <div class="stat-label">Recent (7d)</div>
+    </div>
+  </div>
+
+  <!-- File list card -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">All Files</div>
+      <div class="toolbar-right">
+        <div class="search-wrap" style="position:relative">
+          <span class="search-icon">🔍</span>
+          <input type="text" class="form-input"
+            id="fileSearch" placeholder="Search files…"
+            oninput="filterFiles(this.value)"
+            style="padding-left:2.25rem; width:200px">
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="loadFiles()">
+          ↻ Refresh
+        </button>
+      </div>
+    </div>
+
+    <div class="card-body">
+      <div id="filesContainer">
+        <div class="table-empty">
+          <div class="table-empty-icon">📁</div>
+          <div class="table-empty-text">Loading files…</div>
+        </div>
+      </div>
+
+      <!-- Pagination -->
+      <div id="filesPagination"
+        class="flex items-center justify-between mt-4 hidden">
+        <div class="text-xs text-muted" id="paginationInfo"></div>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary btn-sm"
+            id="prevPageBtn" onclick="changePage(-1)">← Prev</button>
+          <button class="btn btn-secondary btn-sm"
+            id="nextPageBtn" onclick="changePage(1)">Next →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>

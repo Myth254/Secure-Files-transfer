@@ -1,13 +1,104 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Lock-Vault</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VaultSync — Secure File Transfer</title>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/pages.css">
+</head>
+<body>
+
+<div class="app-shell" id="app">
+
+  <!-- Loading splash shown while partials fetch, removed by loader.js -->
+  <div id="loadingSplash" style="
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    flex-direction:column;gap:1rem;color:var(--text-muted)">
+    <div style="font-size:2rem">🔐</div>
+    <div style="font-family:var(--font-mono);font-size:.8125rem;letter-spacing:.05em">
+      Loading VaultSync…
+    </div>
+  </div>
+
+  <!-- Toast notifications (always present) -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!--
+    AUTH VIEWS
+    login.html, register.html, otp.html, key-backup.html
+    are appended here by loader.js
+  -->
+  <div id="authViews"></div>
+
+  <!--
+    DASHBOARD
+    sidebar.html replaces #sidebarMount.
+    page-*.html files are appended to #pagesMount.
+  -->
+  <div id="viewDashboard" class="dashboard-layout hidden">
+
+    <!-- Sidebar placeholder — replaced by sidebar.html via loader.js -->
+    <div id="sidebarMount"></div>
+
+    <!-- Main content -->
+    <div class="main-content">
+
+      <header class="topbar">
+        <div>
+          <div class="topbar-title"      id="topbarTitle">My Files</div>
+          <div class="topbar-breadcrumb" id="topbarBreadcrumb">VaultSync / Files</div>
+        </div>
+        <div class="topbar-actions">
+          <div class="enc-badge">
+            <div class="enc-dot"></div>
+            AES-256-GCM Encrypted
+          </div>
+          <button class="btn btn-ghost btn-sm"
+            onclick="handleLogout()" title="Logout">🚪</button>
+        </div>
+      </header>
+
+      <!-- Dashboard pages injected here by loader.js -->
+      <div class="page-body">
+        <div id="pagesMount"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!--
+    MODALS
+    modals.html is appended here by loader.js
+  -->
+  <div id="modalsMount"></div>
+
+</div>
+
+<!--
+  SCRIPTS — loader.js must be first.
+  It fetches all HTML partials and fires 'partialsReady'.
+  app.js listens for that event and then calls init().
+-->
+<script src="js/loader.js"></script>
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/files.js"></script>
+<script src="js/sharing.js"></script>
+<script src="js/monitoring.js"></script>
+<script src="js/profile.js"></script>
+<script src="js/app.js"></script>
+
+</body>
 </html>

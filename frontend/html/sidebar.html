@@ -1,0 +1,64 @@
+<!-- ═══════════════════════════════════════════════════
+     DASHBOARD SIDEBAR
+     Loaded by: js/loader.js → #sidebarMount
+     Part of the persistent dashboard shell.
+════════════════════════════════════════════════════ -->
+<aside class="sidebar" id="sidebar">
+
+  <!-- Logo -->
+  <div class="sidebar-logo">
+    <div class="logo-icon">🔐</div>
+    <div class="logo-text">Vault<span>Sync</span></div>
+  </div>
+
+  <!-- Navigation -->
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">Main</div>
+
+    <div class="nav-item active" id="nav-files"
+      onclick="switchPage('files')">
+      <span class="nav-icon">📁</span>
+      My Files
+      <span class="nav-badge" id="fileCountBadge">0</span>
+    </div>
+
+    <div class="nav-item" id="nav-share"
+      onclick="switchPage('share')">
+      <span class="nav-icon">🔗</span>
+      File Sharing
+      <span class="nav-badge" id="pendingSharesBadge"
+        style="display:none"></span>
+    </div>
+
+    <div class="nav-section-label">System</div>
+
+    <div class="nav-item" id="nav-monitoring"
+      onclick="switchPage('monitoring')">
+      <span class="nav-icon">📊</span>
+      Monitoring
+      <span class="nav-badge danger" id="alertBadge"
+        style="display:none"></span>
+    </div>
+
+    <div class="nav-section-label">Account</div>
+
+    <div class="nav-item" id="nav-profile"
+      onclick="switchPage('profile')">
+      <span class="nav-icon">⚙</span>
+      Settings
+    </div>
+  </nav>
+
+  <!-- User pill at bottom -->
+  <div class="sidebar-footer">
+    <div class="user-pill" onclick="switchPage('profile')">
+      <div class="user-avatar" id="sidebarAvatar">?</div>
+      <div class="user-info">
+        <div class="user-name" id="sidebarUsername">Loading…</div>
+        <div class="user-role">Authenticated</div>
+      </div>
+      <span style="color:var(--text-muted); font-size:0.75rem">⚙</span>
+    </div>
+  </div>
+
+</aside>

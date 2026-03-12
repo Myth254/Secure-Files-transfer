@@ -1,388 +1,341 @@
 """
 Authentication Service
-Handles user authentication and authorization logic
+Handles user authentication, registration, and profile management.
+
+Changes from original
+─────────────────────
+• Password strength requirements are now enforced (uppercase, lowercase,
+  digit, special character) via SecurityUtils.check_password_strength().
+• EncryptionService.hash_password() / verify_password() used throughout
+  instead of raw bcrypt calls — keeps crypto logic in one place.
+• User.query.get() replaced with db.session.get() (SQLAlchemy 2.x).
+• update_user_profile() no longer calls db.session.commit() mid-function;
+  callers are responsible for committing the outer transaction.
 """
 import re
 import logging
 from typing import Optional, Tuple, Dict, Any
+
 from src.extensions import db
 from src.models.user import User
-from src.models.log import Log
 from src.services.encryption_service import EncryptionService
 from src.utils.exceptions import AuthenticationError, ValidationError
 
 logger = logging.getLogger(__name__)
 
+
 class AuthService:
-    """Service for authentication and user management"""
-    
-    # Validation constants
+    """Service for authentication and user management."""
+
+    # ── Validation constants ──────────────────────────────────────────────
     MIN_USERNAME_LENGTH = 3
     MAX_USERNAME_LENGTH = 50
     MIN_PASSWORD_LENGTH = 8
     MAX_PASSWORD_LENGTH = 100
-    EMAIL_REGEX = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    
+    EMAIL_REGEX = re.compile(
+        r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$'
+    )
+
+    # ── Input validators ──────────────────────────────────────────────────
+
     @staticmethod
     def validate_username(username: str) -> Tuple[bool, str]:
         """
-        Validate username
-        
-        Args:
-            username: Username to validate
-            
+        Validate username format and length.
+
         Returns:
-            Tuple[bool, str]: (is_valid, error_message)
+            (is_valid, error_message)
         """
         username = username.strip()
-        
+
         if not username:
             return False, "Username is required"
-        
         if len(username) < AuthService.MIN_USERNAME_LENGTH:
             return False, f"Username must be at least {AuthService.MIN_USERNAME_LENGTH} characters"
-        
         if len(username) > AuthService.MAX_USERNAME_LENGTH:
             return False, f"Username cannot exceed {AuthService.MAX_USERNAME_LENGTH} characters"
-        
-        # Check for allowed characters (alphanumeric, underscore, hyphen)
-        if not re.match(r'^[a-zA-Z0-9_-]+$', username):
-            return False, "Username can only contain letters, numbers, underscores, and hyphens"
-        
+        if not re.match(r'^[a-zA-Z0-9_\-]+$', username):
+            return False, "Username may only contain letters, numbers, underscores, and hyphens"
+
         return True, ""
-    
+
     @staticmethod
     def validate_email(email: str) -> Tuple[bool, str]:
         """
-        Validate email address
-        
-        Args:
-            email: Email to validate
-            
+        Validate email address format.
+
         Returns:
-            Tuple[bool, str]: (is_valid, error_message)
+            (is_valid, error_message)
         """
         email = email.strip().lower()
-        
+
         if not email:
             return False, "Email is required"
-        
-        if not re.match(AuthService.EMAIL_REGEX, email):
+        if not AuthService.EMAIL_REGEX.match(email):
             return False, "Invalid email format"
-        
+
         return True, ""
-    
+
     @staticmethod
     def validate_password(password: str) -> Tuple[bool, str]:
         """
-        Validate password strength
-        
-        Args:
-            password: Password to validate
-            
+        Validate password strength.
+
+        Enforces: minimum length, uppercase, lowercase, digit, special char.
+        Uses SecurityUtils.check_password_strength() for the full rule set.
+
         Returns:
-            Tuple[bool, str]: (is_valid, error_message)
+            (is_valid, error_message)
         """
+        # Import here to avoid circular imports; SecurityUtils lives in utils
+        from src.utils.security import SecurityUtils
+
         if not password:
             return False, "Password is required"
-        
         if len(password) < AuthService.MIN_PASSWORD_LENGTH:
             return False, f"Password must be at least {AuthService.MIN_PASSWORD_LENGTH} characters"
-        
         if len(password) > AuthService.MAX_PASSWORD_LENGTH:
             return False, f"Password cannot exceed {AuthService.MAX_PASSWORD_LENGTH} characters"
-        
-        # Optional: Add password strength requirements
-        # if not re.search(r'[A-Z]', password):
-        #     return False, "Password must contain at least one uppercase letter"
-        # if not re.search(r'[a-z]', password):
-        #     return False, "Password must contain at least one lowercase letter"
-        # if not re.search(r'[0-9]', password):
-        #     return False, "Password must contain at least one number"
-        
+
+        is_strong, issues = SecurityUtils.check_password_strength(password)
+        if not is_strong:
+            return False, "; ".join(issues)
+
         return True, ""
-    
+
+    # ── Registration ──────────────────────────────────────────────────────
+
     @staticmethod
     def register_user(username: str, email: str, password: str) -> Tuple[User, str]:
         """
-        Register a new user
-        
-        Args:
-            username: Username
-            email: Email address
-            password: Plain text password
-            
+        Register a new user.
+
+        Steps:
+          1. Validate all inputs (username, email, password strength).
+          2. Check uniqueness of username and email.
+          3. Hash password with bcrypt.
+          4. Generate RSA-2048 key pair.
+          5. Encrypt private key with Argon2id + AES-256-GCM.
+          6. Persist User record (flush — caller commits).
+
         Returns:
-            Tuple[User, str]: (user_object, private_key_pem)
-            
+            (user_object, encrypted_private_key)
+            NOTE: the raw private key is NOT returned; the caller must return
+            only the *encrypted* form to the client over HTTPS.
+
         Raises:
-            ValidationError: If validation fails
+            ValidationError: on input or uniqueness failure.
         """
         try:
-            # Validate inputs
+            # ── Validate inputs ───────────────────────────────────────────
             is_valid, error = AuthService.validate_username(username)
             if not is_valid:
-                raise ValidationError(f"Username validation failed: {error}")
-            
+                raise ValidationError(f"Username: {error}")
+
             is_valid, error = AuthService.validate_email(email)
             if not is_valid:
-                raise ValidationError(f"Email validation failed: {error}")
-            
+                raise ValidationError(f"Email: {error}")
+
             is_valid, error = AuthService.validate_password(password)
             if not is_valid:
-                raise ValidationError(f"Password validation failed: {error}")
-            
-            # Check if user already exists
+                raise ValidationError(f"Password: {error}")
+
+            # Normalise before uniqueness check
+            username = username.strip()
+            email    = email.strip().lower()
+
+            # ── Uniqueness ────────────────────────────────────────────────
             if User.query.filter_by(username=username).first():
                 raise ValidationError("Username already exists")
-            
             if User.query.filter_by(email=email).first():
                 raise ValidationError("Email already registered")
-            
-            # Hash password
+
+            # ── Crypto ───────────────────────────────────────────────────
             password_hash = EncryptionService.hash_password(password)
-            
-            # Generate RSA key pair
             private_key_pem, public_key_pem = EncryptionService.generate_rsa_keypair()
-            
-            # Encrypt private key for storage
             encrypted_private_key = EncryptionService.encrypt_private_key(
-                private_key_pem, 
-                password
+                private_key_pem, password
             )
-            
-            # Create user
+
+            # ── Persist ───────────────────────────────────────────────────
             user = User(
                 username=username,
                 email=email,
                 password_hash=password_hash,
                 rsa_public_key=public_key_pem,
-                rsa_private_key_encrypted=encrypted_private_key
+                rsa_private_key_encrypted=encrypted_private_key,
             )
-            
             db.session.add(user)
-            db.session.flush()  # Get user ID without committing
-            
-            logger.info(f"User registered: {username} (ID: {user.id})")
-            
-            return user, private_key_pem
-            
+            db.session.flush()   # populate user.id without committing
+
+            logger.info(f"User registered: {username} (id={user.id})")
+
+            # Return the *encrypted* private key so the caller can send it to
+            # the client. The plaintext private_key_pem is discarded here.
+            return user, encrypted_private_key
+
         except ValidationError:
             raise
         except Exception as e:
-            logger.error(f"Registration failed for {username}: {str(e)}")
+            logger.error(f"Registration failed for '{username}': {e}")
             raise ValidationError("Registration failed. Please try again.")
-    
+
+    # ── Authentication ────────────────────────────────────────────────────
+
     @staticmethod
     def authenticate_user(username: str, password: str) -> User:
         """
-        Authenticate user
-        
-        Args:
-            username: Username
-            password: Plain text password
-            
-        Returns:
-            User: Authenticated user object
-            
+        Verify credentials and return the authenticated User.
+
         Raises:
-            AuthenticationError: If authentication fails
+            AuthenticationError: on any failure (deliberately generic message
+                                 to prevent username enumeration).
         """
         try:
-            # Find user
             user = User.query.filter_by(username=username).first()
-            
+
+            # Use a constant-time comparison path regardless of whether the
+            # user exists to mitigate timing-based username enumeration.
             if not user:
-                logger.warning(f"Authentication failed: User '{username}' not found")
+                # Hash a dummy value so timing is similar
+                EncryptionService.verify_password("dummy", "$2b$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                logger.warning(f"Auth failed: unknown username '{username}'")
                 raise AuthenticationError("Invalid credentials")
-            
-            # Verify password
+
             if not EncryptionService.verify_password(password, user.password_hash):
-                logger.warning(f"Authentication failed: Invalid password for user '{username}'")
+                logger.warning(f"Auth failed: wrong password for '{username}'")
                 raise AuthenticationError("Invalid credentials")
-            
-            # Check if user is active
+
             if not user.is_active:
-                logger.warning(f"Authentication failed: User '{username}' is inactive")
+                logger.warning(f"Auth failed: inactive account '{username}'")
                 raise AuthenticationError("Account is disabled")
-            
-            logger.info(f"User authenticated: {username} (ID: {user.id})")
+
+            logger.info(f"User authenticated: {username} (id={user.id})")
             return user
-            
+
         except AuthenticationError:
             raise
         except Exception as e:
-            logger.error(f"Authentication error for {username}: {str(e)}")
+            logger.error(f"Authentication error for '{username}': {e}")
             raise AuthenticationError("Authentication failed. Please try again.")
-    
+
+    # ── Lookups ───────────────────────────────────────────────────────────
+
     @staticmethod
     def get_user_by_id(user_id: int) -> Optional[User]:
-        """
-        Get user by ID
-        
-        Args:
-            user_id: User ID
-            
-        Returns:
-            Optional[User]: User object or None
-        """
+        """Return the User with *user_id*, or None."""
         try:
-            return User.query.get(user_id)
+            return db.session.get(User, user_id)
         except Exception as e:
-            logger.error(f"Failed to get user by ID {user_id}: {str(e)}")
+            logger.error(f"get_user_by_id({user_id}) failed: {e}")
             return None
-    
+
+    # ── Profile updates ───────────────────────────────────────────────────
+
     @staticmethod
     def update_user_profile(
-        user_id: int, 
+        user_id: int,
         current_password: Optional[str] = None,
         new_email: Optional[str] = None,
-        new_password: Optional[str] = None
+        new_password: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Update user profile
-        
-        Args:
-            user_id: User ID
-            current_password: Current password (required for password change)
-            new_email: New email (optional)
-            new_password: New password (optional)
-            
+        Update email and / or password for *user_id*.
+
+        Password change requires *current_password* to be supplied and correct.
+        The caller is responsible for committing the DB transaction.
+
         Returns:
-            Dict[str, Any]: Update results
-            
+            Dict with keys ``success``, ``updates``, ``user``.
+
         Raises:
-            ValidationError: If validation fails
-            AuthenticationError: If current password is incorrect
+            ValidationError, AuthenticationError
         """
         try:
             user = AuthService.get_user_by_id(user_id)
             if not user:
                 raise ValidationError("User not found")
-            
-            updates = {}
-            
-            # Update email if provided
+
+            updates: Dict[str, Any] = {}
+
+            # ── Email update ──────────────────────────────────────────────
             if new_email:
                 is_valid, error = AuthService.validate_email(new_email)
                 if not is_valid:
                     raise ValidationError(f"Invalid email: {error}")
-                
-                # Check if email is already taken
-                existing_user = User.query.filter_by(email=new_email).first()
-                if existing_user and existing_user.id != user_id:
+
+                new_email = new_email.strip().lower()
+                existing = User.query.filter_by(email=new_email).first()
+                if existing and existing.id != user_id:
                     raise ValidationError("Email already in use")
-                
+
                 user.email = new_email
                 updates['email'] = new_email
-            
-            # Update password if provided
+
+            # ── Password update ───────────────────────────────────────────
             if new_password:
                 if not current_password:
                     raise ValidationError("Current password is required to change password")
-                
-                # Verify current password
+
                 if not EncryptionService.verify_password(current_password, user.password_hash):
                     raise AuthenticationError("Current password is incorrect")
-                
-                # Validate new password
+
                 is_valid, error = AuthService.validate_password(new_password)
                 if not is_valid:
-                    raise ValidationError(f"Invalid new password: {error}")
-                
-                # Hash new password
+                    raise ValidationError(f"New password invalid: {error}")
+
                 user.password_hash = EncryptionService.hash_password(new_password)
-                updates['password'] = True
-            
-            if updates:
-                db.session.commit()
-                logger.info(f"User profile updated for user ID {user_id}: {updates}")
-            
+                updates['password_changed'] = True
+
+            logger.info(f"Profile updated for user {user_id}: {list(updates.keys())}")
+
             return {
                 'success': True,
                 'updates': updates,
-                'user': user.to_dict()
+                'user':    user.to_dict(),
             }
-            
+
         except (ValidationError, AuthenticationError):
             raise
         except Exception as e:
-            db.session.rollback()
-            logger.error(f"Failed to update profile for user {user_id}: {str(e)}")
+            logger.error(f"Profile update failed for user {user_id}: {e}")
             raise ValidationError("Failed to update profile")
-    
+
+    # ── Availability checks ───────────────────────────────────────────────
+
     @staticmethod
     def check_username_availability(username: str) -> Dict[str, Any]:
-        """
-        Check if username is available
-        
-        Args:
-            username: Username to check
-            
-        Returns:
-            Dict[str, Any]: Availability information
-        """
+        """Check whether *username* is valid and not already registered."""
         try:
             is_valid, error = AuthService.validate_username(username)
-            
             if not is_valid:
-                return {
-                    'available': False,
-                    'valid': False,
-                    'message': error
-                }
-            
-            # Check if username exists
-            user = User.query.filter_by(username=username).first()
-            
+                return {'available': False, 'valid': False, 'message': error}
+
+            taken = User.query.filter_by(username=username.strip()).first() is not None
             return {
-                'available': user is None,
-                'valid': True,
-                'message': 'Username is available' if user is None else 'Username already taken'
+                'available': not taken,
+                'valid':     True,
+                'message':   'Username is available' if not taken else 'Username already taken',
             }
-            
         except Exception as e:
-            logger.error(f"Error checking username availability for '{username}': {str(e)}")
-            return {
-                'available': False,
-                'valid': False,
-                'message': 'Error checking username availability'
-            }
-    
+            logger.error(f"Username availability check error: {e}")
+            return {'available': False, 'valid': False, 'message': 'Error checking availability'}
+
     @staticmethod
     def check_email_availability(email: str) -> Dict[str, Any]:
-        """
-        Check if email is available
-        
-        Args:
-            email: Email to check
-            
-        Returns:
-            Dict[str, Any]: Availability information
-        """
+        """Check whether *email* is valid and not already registered."""
         try:
             is_valid, error = AuthService.validate_email(email)
-            
             if not is_valid:
-                return {
-                    'available': False,
-                    'valid': False,
-                    'message': error
-                }
-            
-            # Check if email exists
-            user = User.query.filter_by(email=email).first()
-            
+                return {'available': False, 'valid': False, 'message': error}
+
+            email = email.strip().lower()
+            taken = User.query.filter_by(email=email).first() is not None
             return {
-                'available': user is None,
-                'valid': True,
-                'message': 'Email is available' if user is None else 'Email already registered'
+                'available': not taken,
+                'valid':     True,
+                'message':   'Email is available' if not taken else 'Email already registered',
             }
-            
         except Exception as e:
-            logger.error(f"Error checking email availability for '{email}': {str(e)}")
-            return {
-                'available': False,
-                'valid': False,
-                'message': 'Error checking email availability'
-            }
+            logger.error(f"Email availability check error: {e}")
+            return {'available': False, 'valid': False, 'message': 'Error checking availability'}

@@ -1,0 +1,68 @@
+<!-- ═══════════════════════════════════════════════════
+     VIEW: LOGIN
+     Loaded by: js/loader.js → #viewLogin
+════════════════════════════════════════════════════ -->
+<div id="viewLogin" class="auth-layout">
+  <div class="auth-card">
+
+    <div class="brand-header">
+      <div class="brand-logo">🔐</div>
+      <div class="brand-name">Vault<span>Sync</span></div>
+      <div class="brand-tagline">End-to-end encrypted file transfer</div>
+    </div>
+
+    <!-- Inline error alert -->
+    <div id="loginAlert" class="alert alert-error hidden" role="alert">
+      <span class="alert-icon">⚠</span>
+      <div class="alert-content"><div id="loginAlertMsg"></div></div>
+    </div>
+
+    <form class="form-stack" onsubmit="return false">
+      <div class="form-group">
+        <label class="form-label">
+          Username <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">👤</span>
+          <input type="text" id="loginUsername" class="form-input"
+            placeholder="Enter your username"
+            autocomplete="username" required>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">
+          Password <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">🔒</span>
+          <input type="password" id="loginPassword" class="form-input"
+            placeholder="Enter your password"
+            autocomplete="current-password" required>
+          <span class="input-suffix"
+            onclick="togglePasswordVisibility('loginPassword', this)">👁</span>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-full btn-lg"
+        id="loginBtn" onclick="handleLogin()">
+        Sign In
+      </button>
+    </form>
+
+    <div class="security-info">
+      <div class="security-info-title">🛡 Secure Login</div>
+      <ul>
+        <li>Two-factor authentication via email OTP</li>
+        <li>RSA-2048 + AES-256-GCM encryption</li>
+        <li>Zero-knowledge architecture</li>
+      </ul>
+    </div>
+
+    <div class="auth-switch">
+      Don't have an account?
+      <a onclick="showView('viewRegister')">Create one</a>
+    </div>
+
+  </div>
+</div>

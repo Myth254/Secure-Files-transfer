@@ -2,8 +2,7 @@
 Standardized response utilities for API endpoints
 """
 from flask import jsonify, Response
-from typing import Any, Dict, List, Optional, Union
-import json
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 class APIResponse:
     """Standardized API response format"""
@@ -14,18 +13,18 @@ class APIResponse:
         data: Optional[Union[Dict, List]] = None,
         status_code: int = 200,
         **kwargs
-    ) -> Response:
+    ) -> Tuple[Response, int]:
         """
         Create a success response
-        
+
         Args:
             message: Success message
             data: Response data
             status_code: HTTP status code
             **kwargs: Additional fields
-            
+
         Returns:
-            Response: Flask response object
+            Tuple[Response, int]: Flask response object with status code
         """
         response = {
             'success': True,
@@ -36,7 +35,6 @@ class APIResponse:
         if data is not None:
             response['data'] = data
         
-        # Add any additional fields
         response.update(kwargs)
         
         return jsonify(response), status_code
@@ -48,19 +46,23 @@ class APIResponse:
         error_type: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> Response:
+    ) -> Tuple[Response, int]:
         """
-        Create an error response
-        
+        Create an error response.
+
+        The `message` parameter must never contain raw exception text (str(e)).
+        Always pass a fixed, developer-written string so that internal details
+        are never leaked to the client.
+
         Args:
-            message: Error message
+            message: Error message (must be a safe, pre-defined string)
             status_code: HTTP status code
             error_type: Type of error (e.g., 'validation_error')
             details: Additional error details
             **kwargs: Additional fields
-            
+
         Returns:
-            Response: Flask response object
+            Tuple[Response, int]: Flask response object with status code
         """
         response = {
             'success': False,
@@ -74,7 +76,6 @@ class APIResponse:
         if details:
             response['details'] = details
         
-        # Add any additional fields
         response.update(kwargs)
         
         return jsonify(response), status_code
@@ -87,10 +88,10 @@ class APIResponse:
         per_page: int,
         message: str = "Data retrieved successfully",
         **kwargs
-    ) -> Response:
+    ) -> Tuple[Response, int]:
         """
         Create a paginated response
-        
+
         Args:
             data: List of items for current page
             total: Total number of items
@@ -98,9 +99,9 @@ class APIResponse:
             per_page: Items per page
             message: Success message
             **kwargs: Additional fields
-            
+
         Returns:
-            Response: Flask response object
+            Tuple[Response, int]: Flask response object with status code
         """
         total_pages = (total + per_page - 1) // per_page if per_page > 0 else 0
         
@@ -118,7 +119,6 @@ class APIResponse:
             }
         }
         
-        # Add any additional fields
         response.update(kwargs)
         
         return jsonify(response), 200
@@ -129,18 +129,18 @@ class APIResponse:
         data: Optional[Dict] = None,
         location: Optional[str] = None,
         **kwargs
-    ) -> Response:
+    ) -> Tuple[Response, int]:
         """
         Create a 201 Created response
-        
+
         Args:
             message: Success message
             data: Created resource data
             location: URL of created resource (for Location header)
             **kwargs: Additional fields
-            
+
         Returns:
-            Response: Flask response object
+            Tuple[Response, int]: Flask response object with status code
         """
         response = APIResponse.success(
             message=message,
@@ -149,7 +149,6 @@ class APIResponse:
             **kwargs
         )
         
-        # Add Location header if provided
         if location:
             response[0].headers['Location'] = location
         
@@ -159,16 +158,16 @@ class APIResponse:
     def deleted(
         message: str = "Resource deleted successfully",
         **kwargs
-    ) -> Response:
+    ) -> Tuple[Response, int]:
         """
         Create a 200 OK response for deletion
-        
+
         Args:
             message: Success message
             **kwargs: Additional fields
-            
+
         Returns:
-            Response: Flask response object
+            Tuple[Response, int]: Flask response object with status code
         """
         return APIResponse.success(
             message=message,
@@ -177,17 +176,17 @@ class APIResponse:
         )
     
     @staticmethod
-    def no_content() -> Response:
+    def no_content() -> Tuple[str, int]:
         """
         Create a 204 No Content response
-        
+
         Returns:
-            Response: Flask response object
+            Tuple[str, int]: Empty tuple with 204 status code
         """
         return '', 204
 
 # Common response shortcuts
-def validation_error(message: str = "Validation failed", details: Optional[Dict] = None) -> Response:
+def validation_error(message: str = "Validation failed", details: Optional[Dict] = None) -> Tuple[Response, int]:
     """Shortcut for validation error response"""
     return APIResponse.error(
         message=message,
@@ -196,7 +195,7 @@ def validation_error(message: str = "Validation failed", details: Optional[Dict]
         details=details
     )
 
-def authentication_error(message: str = "Authentication required") -> Response:
+def authentication_error(message: str = "Authentication required") -> Tuple[Response, int]:
     """Shortcut for authentication error response"""
     return APIResponse.error(
         message=message,
@@ -204,7 +203,7 @@ def authentication_error(message: str = "Authentication required") -> Response:
         error_type='authentication_error'
     )
 
-def authorization_error(message: str = "Access denied") -> Response:
+def authorization_error(message: str = "Access denied") -> Tuple[Response, int]:
     """Shortcut for authorization error response"""
     return APIResponse.error(
         message=message,
@@ -212,7 +211,7 @@ def authorization_error(message: str = "Access denied") -> Response:
         error_type='authorization_error'
     )
 
-def not_found_error(message: str = "Resource not found") -> Response:
+def not_found_error(message: str = "Resource not found") -> Tuple[Response, int]:
     """Shortcut for not found error response"""
     return APIResponse.error(
         message=message,
@@ -220,15 +219,19 @@ def not_found_error(message: str = "Resource not found") -> Response:
         error_type='not_found_error'
     )
 
-def server_error(message: str = "Internal server error") -> Response:
-    """Shortcut for server error response"""
+def server_error(message: str = "Internal server error") -> Tuple[Response, int]:
+    """Shortcut for server error response.
+
+    Always returns a fixed, safe message.  str(e) must NEVER be passed here
+    from a caller — log it server-side with exc_info=True instead.
+    """
     return APIResponse.error(
         message=message,
         status_code=500,
         error_type='server_error'
     )
 
-def rate_limit_error(message: str = "Rate limit exceeded", retry_after: Optional[int] = None) -> Response:
+def rate_limit_error(message: str = "Rate limit exceeded", retry_after: Optional[int] = None) -> Tuple[Response, int]:
     """Shortcut for rate limit error response"""
     response = APIResponse.error(
         message=message,
@@ -244,12 +247,11 @@ def rate_limit_error(message: str = "Rate limit exceeded", retry_after: Optional
 # Response decorator for consistent formatting
 def standardized_response(func):
     """
-    Decorator to standardize API responses
-    
-    Usage:
-        @standardized_response
-        def my_endpoint():
-            return {'key': 'value'}, 200
+    Decorator to standardize API responses.
+
+    Uncaught exceptions are logged server-side (with exc_info=True so the full
+    traceback is available in the log) but the client only ever receives the
+    generic "An unexpected error occurred" message — str(e) is never forwarded.
     """
     from functools import wraps
     
@@ -266,14 +268,13 @@ def standardized_response(func):
             if isinstance(result, tuple) and len(result) == 2:
                 data, status_code = result
                 
-                # Determine if it's a success or error
                 if 200 <= status_code < 300:
                     return APIResponse.success(
                         data=data if data is not None else {},
                         status_code=status_code
                     )
                 else:
-                    # Extract error message from data
+                    # Extract a safe error message from data
                     if isinstance(data, dict) and 'error' in data:
                         message = data['error']
                     elif isinstance(data, str):
@@ -288,10 +289,15 @@ def standardized_response(func):
                     )
             
             # If result is just data, assume success 200
-            return APIResponse.success(data=result)
+            # Type is properly inferred as dict or list (not a tuple) due to prior checks
+            safe_data: Optional[Union[Dict, List]] = None
+            if isinstance(result, (dict, list)):
+                safe_data = result
+            return APIResponse.success(data=safe_data)
             
         except Exception as e:
-            # Handle uncaught exceptions
+            # Log full traceback server-side; return a generic message to the client.
+            # str(e) is intentionally NOT forwarded to the response body.
             import logging
             logger = logging.getLogger(func.__module__)
             logger.error(f"Unhandled exception in {func.__name__}: {str(e)}", exc_info=True)

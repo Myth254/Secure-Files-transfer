@@ -3,18 +3,18 @@ Validation utilities for input data
 """
 import re
 from typing import Tuple, Dict, Any, Optional
+from werkzeug.utils import secure_filename
 
 def validate_registration(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     """
     Validate registration data
-    
+
     Args:
         data: Registration data containing username, email, password
-        
+
     Returns:
         Tuple[bool, str]: (is_valid, error_message)
     """
-    # Check if data exists
     if not data:
         return False, "No data provided"
     
@@ -37,37 +37,21 @@ def validate_registration(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     if not re.match(email_regex, email):
         return False, "Invalid email format"
     
-    # Validate password
+    # Validate password with full strength checks (F-18)
     password = data.get('password', '')
-    if not password:
-        return False, "Password is required"
-    if len(password) < 8:
-        return False, "Password must be at least 8 characters"
-    if len(password) > 100:
-        return False, "Password cannot exceed 100 characters"
-    
-    # Optional: Password strength validation
-    # Uncomment if you want stronger password requirements
-    """
-    if not re.search(r'[A-Z]', password):
-        return False, "Password must contain at least one uppercase letter"
-    if not re.search(r'[a-z]', password):
-        return False, "Password must contain at least one lowercase letter"
-    if not re.search(r'[0-9]', password):
-        return False, "Password must contain at least one number"
-    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
-        return False, "Password must contain at least one special character"
-    """
+    valid, error = validate_password(password)
+    if not valid:
+        return False, error
     
     return True, None
 
 def validate_login(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     """
     Validate login data
-    
+
     Args:
         data: Login data containing username and password
-        
+
     Returns:
         Tuple[bool, str]: (is_valid, error_message)
     """
@@ -87,10 +71,10 @@ def validate_login(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
 def validate_email(email: str) -> Tuple[bool, Optional[str]]:
     """
     Validate email format
-    
+
     Args:
         email: Email address to validate
-        
+
     Returns:
         Tuple[bool, str]: (is_valid, error_message)
     """
@@ -110,11 +94,14 @@ def validate_email(email: str) -> Tuple[bool, Optional[str]]:
 
 def validate_password(password: str) -> Tuple[bool, Optional[str]]:
     """
-    Validate password strength
-    
+    Validate password strength.
+
+    Enforces minimum length, maximum length, and character-class requirements
+    (uppercase, lowercase, digit, special character).
+
     Args:
         password: Password to validate
-        
+
     Returns:
         Tuple[bool, str]: (is_valid, error_message)
     """
@@ -127,15 +114,25 @@ def validate_password(password: str) -> Tuple[bool, Optional[str]]:
     if len(password) > 100:
         return False, "Password cannot exceed 100 characters"
     
+    # Enforce character-class requirements (F-18)
+    if not re.search(r'[A-Z]', password):
+        return False, "Password must contain at least one uppercase letter"
+    if not re.search(r'[a-z]', password):
+        return False, "Password must contain at least one lowercase letter"
+    if not re.search(r'[0-9]', password):
+        return False, "Password must contain at least one number"
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        return False, "Password must contain at least one special character"
+    
     return True, None
 
 def validate_username(username: str) -> Tuple[bool, Optional[str]]:
     """
     Validate username
-    
+
     Args:
         username: Username to validate
-        
+
     Returns:
         Tuple[bool, str]: (is_valid, error_message)
     """
@@ -157,11 +154,14 @@ def validate_username(username: str) -> Tuple[bool, Optional[str]]:
 
 def validate_file_upload(file) -> Tuple[bool, Optional[str]]:
     """
-    Validate file upload
-    
+    Validate file upload.
+
+    Uses werkzeug's secure_filename() to catch OS-specific edge cases in
+    addition to manual checks.
+
     Args:
         file: File object from request.files
-        
+
     Returns:
         Tuple[bool, str]: (is_valid, error_message)
     """
@@ -171,11 +171,16 @@ def validate_file_upload(file) -> Tuple[bool, Optional[str]]:
     if file.filename == '':
         return False, "No file selected"
     
-    # Check filename length
+    # Check filename length before sanitisation
     if len(file.filename) > 255:
         return False, "Filename is too long"
     
-    # Check for invalid characters in filename
+    # Sanitise with werkzeug — rejects path traversal and OS-reserved names
+    safe_name = secure_filename(file.filename)
+    if not safe_name:
+        return False, "Filename is invalid after sanitisation"
+    
+    # Check for invalid characters in the original filename
     invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
     for char in invalid_chars:
         if char in file.filename:
@@ -186,10 +191,10 @@ def validate_file_upload(file) -> Tuple[bool, Optional[str]]:
 def validate_share_permissions(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     """
     Validate file sharing permissions
-    
+
     Args:
         data: Share permissions data
-        
+
     Returns:
         Tuple[bool, str]: (is_valid, error_message)
     """
@@ -229,23 +234,14 @@ def validate_share_permissions(data: Dict[str, Any]) -> Tuple[bool, Optional[str
     
     return True, None
 
-def sanitize_input(text: str) -> str:
-    """
-    Sanitize user input to prevent XSS attacks
-    
-    Args:
-        text: Raw input text
-        
-    Returns:
-        str: Sanitized text
-    """
-    if not text:
-        return ""
-    
-    # Remove potentially dangerous characters
-    dangerous_chars = ['<', '>', '"', "'", '&', ';', '`', '|', '*', '?', '~', '[', ']', '{', '}', '(', ')']
-    sanitized = text
-    for char in dangerous_chars:
-        sanitized = sanitized.replace(char, '')
-    
-    return sanitized.strip()
+# NOTE: sanitize_input() has been removed.
+#
+# Stripping characters like <, >, (, ) from input is not the correct defence
+# against XSS for a JSON API.  XSS lives in the browser when user-supplied
+# content is rendered without escaping.  The correct mitigation is output
+# encoding at the rendering layer (e.g. Jinja2 autoescape, React's JSX
+# escaping, Content-Security-Policy headers) — not mangling input data that
+# may contain legitimate characters.
+#
+# If you need to strip HTML from a specific field (e.g. a rich-text field),
+# use a purpose-built library such as bleach with an explicit allow-list.

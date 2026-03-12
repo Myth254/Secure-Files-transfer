@@ -1,0 +1,103 @@
+<!-- ═══════════════════════════════════════════════════
+     VIEW: REGISTER
+     Loaded by: js/loader.js → #viewRegister
+════════════════════════════════════════════════════ -->
+<div id="viewRegister" class="auth-layout hidden">
+  <div class="auth-card" style="max-width:480px">
+
+    <div class="brand-header">
+      <div class="brand-logo">🔐</div>
+      <div class="brand-name">Vault<span>Sync</span></div>
+      <div class="brand-tagline">Create your secure account</div>
+    </div>
+
+    <div id="registerAlert" class="alert alert-error hidden" role="alert">
+      <span class="alert-icon">⚠</span>
+      <div class="alert-content"><div id="registerAlertMsg"></div></div>
+    </div>
+
+    <form class="form-stack" onsubmit="return false">
+
+      <div class="form-row">
+        <!-- Username -->
+        <div class="form-group">
+          <label class="form-label">
+            Username <span class="required">*</span>
+          </label>
+          <div class="input-wrapper">
+            <span class="input-icon">👤</span>
+            <input type="text" id="regUsername" class="form-input"
+              placeholder="john_doe"
+              minlength="3" maxlength="50"
+              autocomplete="username"
+              oninput="checkUsernameAvailability(this.value)">
+          </div>
+          <div id="regUsernameHint" class="form-hint">
+            Letters, numbers, _ and - only
+          </div>
+        </div>
+
+        <!-- Email -->
+        <div class="form-group">
+          <label class="form-label">
+            Email <span class="required">*</span>
+          </label>
+          <div class="input-wrapper">
+            <span class="input-icon">✉</span>
+            <input type="email" id="regEmail" class="form-input"
+              placeholder="you@example.com"
+              autocomplete="email">
+          </div>
+        </div>
+      </div>
+
+      <!-- Password -->
+      <div class="form-group">
+        <label class="form-label">
+          Password <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">🔒</span>
+          <input type="password" id="regPassword" class="form-input"
+            placeholder="Minimum 8 characters"
+            autocomplete="new-password"
+            oninput="updatePasswordStrength(this.value)">
+          <span class="input-suffix"
+            onclick="togglePasswordVisibility('regPassword', this)">👁</span>
+        </div>
+        <!-- 4-segment strength meter -->
+        <div class="password-strength">
+          <div class="strength-bar" id="sb1"></div>
+          <div class="strength-bar" id="sb2"></div>
+          <div class="strength-bar" id="sb3"></div>
+          <div class="strength-bar" id="sb4"></div>
+        </div>
+      </div>
+
+      <!-- Confirm password -->
+      <div class="form-group">
+        <label class="form-label">
+          Confirm Password <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">🔒</span>
+          <input type="password" id="regConfirmPassword" class="form-input"
+            placeholder="Repeat your password"
+            autocomplete="new-password">
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-full btn-lg"
+        id="registerBtn" onclick="handleRegister()">
+        Create Account
+      </button>
+
+    </form>
+
+    <div class="auth-switch">
+      Already have an account?
+      <a onclick="showView('viewLogin')">Sign in</a>
+    </div>
+
+  </div>
+</div>

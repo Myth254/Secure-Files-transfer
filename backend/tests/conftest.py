@@ -8,7 +8,6 @@ from flask import Flask
 from src.extensions import db, jwt
 from src.models.user import User
 from src.models.file import File
-from src.models.log import Log
 import bcrypt
 
 # Test configuration

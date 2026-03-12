@@ -38,7 +38,7 @@ def test_encryption_flow():
     print("\n4. 🔓 Decrypting private key with password...")
     try:
         decrypted_private = EncryptionService.decrypt_private_key(encrypted_private, password)
-        print(f"✅ Decryption successful")
+        print("✅ Decryption successful")
         print(f"Original and decrypted match: {private_key == decrypted_private}")
     except Exception as e:
         print(f"❌ Decryption failed: {e}")
@@ -56,7 +56,7 @@ def test_encryption_flow():
     print("\n6. 📄 Decrypting test file...")
     try:
         decrypted_data = EncryptionService.decrypt_file(encrypted_file, encrypted_aes_key, private_key)
-        print(f"✅ Decryption successful")
+        print("✅ Decryption successful")
         print(f"Original and decrypted match: {test_data == decrypted_data}")
         print(f"Decrypted data size: {len(decrypted_data)} bytes")
     except Exception as e:
@@ -68,7 +68,7 @@ def test_encryption_flow():
     try:
         EncryptionService.decrypt_file(encrypted_file, encrypted_aes_key, wrong_private)
         print("❌ Should have failed but didn't!")
-    except:
+    except Exception:
         print("✅ Correctly failed with wrong private key")
     
     print("\n" + "=" * 60)

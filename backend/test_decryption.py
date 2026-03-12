@@ -83,7 +83,7 @@ decrypted_data = decryptor.update(ciphertext) + decryptor.finalize()
 with open('decrypted_file.txt', 'wb') as f:
     f.write(decrypted_data)
 
-print(f"✅ File decrypted successfully!")
+print("✅ File decrypted successfully!")
 print(f"Original filename: {file_data['filename']}")
 print(f"Decrypted size: {len(decrypted_data)} bytes")
 print(f"Decrypted content: {decrypted_data.decode()}")

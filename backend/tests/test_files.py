@@ -1,9 +1,7 @@
 """
 Tests for file management endpoints
 """
-import json
 import io
-import pytest
 from src.models.file import File
 from src.models.log import Log
 

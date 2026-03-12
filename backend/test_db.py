@@ -3,7 +3,6 @@
 Simple Database Connection Test
 """
 import os
-import sys
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -183,7 +182,7 @@ def quick_check():
             print(f"✅ MySQL installed: {result.stdout.strip()}")
         else:
             print("❌ MySQL not found in PATH")
-    except:
+    except Exception:
         print("❌ Could not check MySQL")
     
     # Check Python packages
@@ -193,13 +192,13 @@ def quick_check():
     for package in packages:
         try:
             if package == 'mysql-connector-python':
-                import mysql.connector
+                __import__('mysql.connector')
                 print(f"✅ {package} installed")
             elif package == 'sqlalchemy':
-                import sqlalchemy
+                __import__('sqlalchemy')
                 print(f"✅ {package} installed")
             elif package == 'flask':
-                import flask
+                __import__('flask')
                 print(f"✅ {package} installed")
         except ImportError:
             print(f"❌ {package} NOT installed")

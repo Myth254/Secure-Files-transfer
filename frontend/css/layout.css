@@ -1,0 +1,261 @@
+/* ═══════════════════════════════════════════════════════
+   LAYOUT — layout.css
+   App shell, sidebar, topbar, auth layout, dashboard
+═══════════════════════════════════════════════════════ */
+
+/* ── App shell ── */
+.app-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
+/* ════════════════════════════════════════
+   AUTH LAYOUT
+════════════════════════════════════════ */
+.auth-layout {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  position: relative;
+}
+
+/* Ambient glow behind auth card */
+.auth-layout::after {
+  content: '';
+  position: fixed;
+  top: -30%; left: -10%;
+  width: 60%; height: 70%;
+  background: radial-gradient(ellipse at center, rgba(29,66,128,0.25) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2xl);
+  padding: 2.5rem;
+  box-shadow: var(--shadow-elevated);
+  position: relative;
+  z-index: 1;
+  animation: slideUp 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Gradient top-border accent on auth card */
+.auth-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--navy-400), transparent);
+  border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+}
+
+/* ════════════════════════════════════════
+   DASHBOARD LAYOUT
+════════════════════════════════════════ */
+.dashboard-layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; bottom: 0; left: 0;
+  z-index: 100;
+  transition: transform 0.3s ease;
+}
+
+.sidebar-logo {
+  padding: 1.5rem 1.25rem 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.logo-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--navy-600), var(--navy-400));
+  border-radius: var(--radius-md);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.9rem;
+  box-shadow: var(--glow-accent);
+}
+
+.logo-text {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.1rem;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+.logo-text span { color: var(--navy-300); }
+
+/* ── Nav ── */
+.sidebar-nav {
+  padding: 1rem 0.75rem;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-section-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0.875rem 0.5rem 0.375rem;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+  text-decoration: none;
+}
+
+.nav-item:hover {
+  background: rgba(58, 110, 196, 0.08);
+  color: var(--text-primary);
+}
+
+.nav-item.active {
+  background: rgba(58, 110, 196, 0.15);
+  border-color: var(--border-mid);
+  color: var(--navy-200);
+  box-shadow: 0 1px 8px rgba(58, 110, 196, 0.12);
+}
+
+.nav-item .nav-icon {
+  width: 18px; height: 18px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.nav-item.active .nav-icon { opacity: 1; }
+
+.nav-badge {
+  margin-left: auto;
+  background: var(--navy-600);
+  color: var(--navy-200);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.125rem 0.4rem;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+}
+
+.nav-badge.danger { background: var(--red-700); color: var(--red-100); }
+
+/* ── Sidebar footer ── */
+.sidebar-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.user-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.user-pill:hover { background: var(--navy-800); }
+
+.user-avatar {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--navy-600), var(--navy-400));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-family: var(--font-display);
+  color: var(--white);
+  flex-shrink: 0;
+}
+
+.user-info    { flex: 1; min-width: 0; }
+.user-name    { font-size: 0.8125rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-role    { font-size: 0.6875rem; color: var(--text-muted); }
+
+/* ── Main content area ── */
+.main-content {
+  margin-left: 240px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Top bar ── */
+.topbar {
+  height: 60px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 1.5rem;
+  gap: 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.topbar-title      { font-family: var(--font-display); font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+.topbar-breadcrumb { font-size: 0.75rem; color: var(--text-muted); margin-top: 1px; }
+.topbar-actions    { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
+
+/* ── Page body ── */
+.page-body {
+  padding: 1.75rem;
+  animation: fadeIn 0.25s ease;
+}
+
+/* ── Page header ── */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  gap: 1rem;
+}
+
+.page-header-left h2 { font-size: 1.4rem; color: var(--text-primary); }
+.page-header-left p  { font-size: 0.8125rem; color: var(--text-muted); margin-top: 2px; }
+
+/* ── Toolbar ── */
+.toolbar         { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+.toolbar-left    { flex: 1; min-width: 200px; }
+.toolbar-right   { display: flex; gap: 0.5rem; align-items: center; }
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .sidebar         { transform: translateX(-100%); }
+  .sidebar.open    { transform: none; }
+  .main-content    { margin-left: 0; }
+}

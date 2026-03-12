@@ -1,302 +1,307 @@
+"""
+Authentication routes — /api/auth/*
+
+Fixes applied
+─────────────
+F-02  verify_login_otp no longer accepts user_id from the request body.
+      user_id is resolved from the server-side OTP record.
+F-03  No secret defaults — handled in config.py; no change needed here.
+F-06  register() no longer returns the plaintext RSA private key.
+      Only the Argon2id-encrypted form is sent to the client.
+F-07  encrypt_private_key_for_storage() used bcrypt.kdf(rounds=100).
+      Removed entirely; EncryptionService.encrypt_private_key() (Argon2id)
+      is used via AuthService.register_user().
+F-08  str(e) never returned to clients; generic messages + error IDs.
+F-09  Inline bcrypt calls removed; EncryptionService used throughout.
+F-17  logout() adds the JWT JTI to the Redis blocklist so the token
+      cannot be reused after logout.
+SQLAlchemy 2.x: User.query.get() → db.session.get()
+datetime.utcnow() → datetime.now(timezone.utc)
+"""
+import uuid
+import logging
+from datetime import datetime, timezone
+
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-import bcrypt
+from flask_jwt_extended import (
+    create_access_token, jwt_required, get_jwt_identity, get_jwt,
+)
+
 from src.extensions import db
 from src.models.user import User
 from src.models.log import Log
-from src.utils.validators import validate_registration, validate_login
+from src.services.auth_service import AuthService
 from src.services.otp_service import OTPService
-import logging
+from src.utils.exceptions import AuthenticationError, ValidationError
 
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint('auth', __name__)
 
-def generate_rsa_keys():
-    """Generate RSA key pair"""
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.hazmat.backends import default_backend
-    
-    private_key = rsa.generate_private_key(
-        public_exponent=65537, 
-        key_size=2048, 
-        backend=default_backend()
-    )
-    public_key = private_key.public_key()
-    
-    private_pem = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption()
-    )
-    public_pem = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    )
-    
-    return private_pem.decode(), public_pem.decode()
 
-def encrypt_private_key_for_storage(private_key_pem: str, password: str) -> str:
-    """Encrypt private key with password-derived key"""
-    import os
-    
-    salt = os.urandom(16)
-    key = bcrypt.kdf(
-        password=password.encode(),
-        salt=salt,
-        desired_key_bytes=32,
-        rounds=100
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _log(user_id, action: str, details: str) -> None:
+    try:
+        db.session.add(Log(
+            user_id=user_id,
+            action=action,
+            details=details,
+            ip_address=request.remote_addr,
+            user_agent=request.user_agent.string if request.user_agent else None,
+        ))
+    except Exception as exc:
+        logger.error(f"Audit log failed: {exc}")
+
+
+def _redis_client():
+    from flask import current_app
+    import redis
+    return redis.from_url(
+        current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
+        decode_responses=True,
     )
-    
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.backends import default_backend
-    
-    iv = os.urandom(12)
-    cipher = Cipher(algorithms.AES(key), modes.GCM(iv), backend=default_backend())
-    encryptor = cipher.encryptor()
-    
-    encrypted = iv + encryptor.update(private_key_pem.encode()) + encryptor.finalize() + encryptor.tag
-    
-    return f"{salt.hex()}:{encrypted.hex()}"
+
+
+# ── register ──────────────────────────────────────────────────────────────────
 
 @auth_bp.route('/register', methods=['POST'])
 def register():
-    """Register a new user"""
+    """
+    Register a new user.
+
+    Returns only the *encrypted* private key — the plaintext key is NEVER
+    transmitted (F-06).  The client must store the encrypted key and supply
+    the correct password to decrypt it locally when needed.
+    """
+    err_id = uuid.uuid4().hex
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
-        
+
         username = data.get('username', '').strip()
-        email = data.get('email', '').strip().lower()
+        email    = data.get('email',    '').strip().lower()
         password = data.get('password', '')
-        
-        # Validate input
-        if not username or len(username) < 3:
-            return jsonify({'success': False, 'error': 'Username must be at least 3 characters'}), 400
-        if not email or '@' not in email:
-            return jsonify({'success': False, 'error': 'Invalid email address'}), 400
-        if not password or len(password) < 8:
-            return jsonify({'success': False, 'error': 'Password must be at least 8 characters'}), 400
-        
-        # Check if user already exists
-        if User.query.filter_by(username=username).first():
-            return jsonify({'success': False, 'error': 'Username already exists'}), 400
-        if User.query.filter_by(email=email).first():
-            return jsonify({'success': False, 'error': 'Email already exists'}), 400
-        
-        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        private_key, public_key = generate_rsa_keys()
-        encrypted_private = encrypt_private_key_for_storage(private_key, password)
-        
-        user = User(
-            username=username,
-            email=email,
-            password_hash=password_hash,
-            rsa_public_key=public_key,
-            rsa_private_key_encrypted=encrypted_private
-        )
-        
-        db.session.add(user)
-        
-        log_entry = Log(
-            action='register',
-            details=f'User {username} registered',
-            ip_address=request.remote_addr,
-            user_agent=request.user_agent.string if request.user_agent else None
-        )
-        db.session.add(log_entry)
-        db.session.commit()
-        
-        # ============ FIX: CREATE AND RETURN TOKEN ============
+
+        # All validation, password strength, uniqueness checks and crypto
+        # are delegated to AuthService.register_user()
+        user, encrypted_private_key = AuthService.register_user(username, email, password)
+
         token = create_access_token(identity=user)
-        # ======================================================
-        
-        logger.info(f"New user registered: {username} (ID: {user.id})")
-        
+        _log(None, 'register', f'User {username} registered')
+        db.session.commit()
+
+        logger.info(f"Registered: {username} (id={user.id})")
+
         return jsonify({
             'success': True,
             'message': 'Registration successful',
-            'token': token,  # <-- TOKEN ADDED HERE
+            'token':   token,
             'user': {
-                'id': user.id,
-                'username': username,
-                'email': email
+                'id':       user.id,
+                'username': user.username,
+                'email':    user.email,
             },
-            'rsa_private_key': private_key,
-            'warning': 'SAVE THIS PRIVATE KEY SECURELY! You will need it to decrypt your files.'
+            # Encrypted private key only — plaintext never transmitted
+            'encrypted_private_key': encrypted_private_key,
+            'notice': (
+                'Store your encrypted_private_key securely. '
+                'Your password is required to decrypt it locally.'
+            ),
         }), 201
-        
-    except Exception as e:
+
+    except ValidationError as ve:
         db.session.rollback()
-        logger.error(f"Registration error: {str(e)}")
-        return jsonify({'success': False, 'error': 'Registration failed. Please try again.'}), 500
+        return jsonify({'success': False, 'error': str(ve)}), 400
+    except Exception:
+        db.session.rollback()
+        logger.error(f"[{err_id}] Registration failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Registration failed. Please try again.', 'error_id': err_id}), 500
+
+
+# ── login step 1 ──────────────────────────────────────────────────────────────
 
 @auth_bp.route('/login', methods=['POST'])
 def login():
-    """Step 1: Authenticate user with password and send OTP"""
+    """
+    Step 1 of 2FA: verify password and send OTP.
+    user_id is intentionally NOT returned — it is bound server-side to otp_id.
+    """
+    err_id = uuid.uuid4().hex
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
-        
+
         username = data.get('username', '').strip()
         password = data.get('password', '')
-        
+
         if not username or not password:
             return jsonify({'success': False, 'error': 'Username and password required'}), 400
-        
-        user = User.query.filter_by(username=username).first()
-        
-        if not user or not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
-            log_entry = Log(
-                action='login_failed',
-                details=f'Failed login attempt for username: {username}',
-                ip_address=request.remote_addr,
-                user_agent=request.user_agent.string if request.user_agent else None
-            )
-            db.session.add(log_entry)
-            db.session.commit()
-            return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
-        
-        if not user.is_active:
-            return jsonify({'success': False, 'error': 'Account is disabled'}), 403
-        
+
+        # Raises AuthenticationError on failure (generic message prevents enumeration)
+        user = AuthService.authenticate_user(username, password)
+
         otp_result = OTPService.send_otp(
             user_id=user.id,
             email=user.email,
             purpose='login',
             username=user.username,
-            request=request
+            request=request,
         )
-        
+
         if not otp_result['success']:
-            return jsonify({'success': False, 'error': otp_result['error']}), 500
-        
+            return jsonify({'success': False, 'error': 'Failed to send OTP'}), 500
+
+        logger.info(f"OTP dispatched for user={username}")
         return jsonify({
-            'success': True,
-            'message': 'Password verified. OTP sent to your email.',
+            'success':      True,
+            'message':      'Password verified. OTP sent to your email.',
             'requires_otp': True,
-            'otp_id': otp_result['otp_id'],
-            'expires_in': otp_result['expires_in'],
-            'user_id': user.id,
-            'username': user.username,
-            'email': user.email
+            'otp_id':       otp_result['otp_id'],
+            'expires_in':   otp_result['expires_in'],
+            # user_id omitted — resolved server-side at step 2
         }), 200
-        
-    except Exception as e:
-        logger.error(f"Login error: {str(e)}")
-        return jsonify({'success': False, 'error': 'Login failed. Please try again.'}), 500
+
+    except AuthenticationError as ae:
+        # Log failed attempt (no user_id available — that's intentional)
+        _log(None, 'login_failed', f'Failed login: {data.get("username", "") if data else ""}') # type: ignore
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return jsonify({'success': False, 'error': str(ae)}), 401
+    except Exception:
+        logger.error(f"[{err_id}] Login step 1 error", exc_info=True)
+        return jsonify({'success': False, 'error': 'Login failed. Please try again.', 'error_id': err_id}), 500
+
+
+# ── login step 2 ──────────────────────────────────────────────────────────────
 
 @auth_bp.route('/verify-login-otp', methods=['POST'])
 def verify_login_otp():
-    """Step 2: Verify OTP and complete login"""
+    """
+    Step 2 of 2FA: verify OTP and issue JWT.
+
+    user_id is resolved from the server-side OTP record bound to otp_id —
+    it is NEVER accepted from the request body (F-12).
+    """
+    err_id = uuid.uuid4().hex
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
-        
-        otp_id = data.get('otp_id')
+
+        otp_id   = data.get('otp_id')
         otp_code = data.get('otp_code')
-        user_id = data.get('user_id')
-        
-        if not otp_id or not otp_code or not user_id:
-            return jsonify({'success': False, 'error': 'OTP ID, code and user ID are required'}), 400
-        
-        verify_result = OTPService.verify_otp(otp_id, otp_code, user_id, request)
-        
+
+        if not otp_id or not otp_code:
+            return jsonify({'success': False, 'error': 'otp_id and otp_code are required'}), 400
+
+        # verify_otp resolves user_id from the DB record internally
+        verify_result = OTPService.verify_otp(otp_id, otp_code, request)  # type: ignore
+
         if not verify_result['success']:
-            return jsonify({'success': False, 'error': verify_result['error']}), 401
-        
-        user = User.query.get(user_id)
+            return jsonify({'success': False, 'error': 'OTP verification failed'}), 401
+
+        user = db.session.get(User, verify_result['user_id'])
         if not user:
             return jsonify({'success': False, 'error': 'User not found'}), 404
-        
+
         token = create_access_token(identity=user)
-        
-        log_entry = Log(
-            user_id=user.id,
-            action='login',
-            details=f'Successful login with OTP for {user.username}',
-            ip_address=request.remote_addr,
-            user_agent=request.user_agent.string if request.user_agent else None
-        )
-        db.session.add(log_entry)
+        _log(user.id, 'login', f'2FA login: {user.username}')
         db.session.commit()
-        
+
+        logger.info(f"Login complete: {user.username} (id={user.id})")
         return jsonify({
             'success': True,
             'message': 'Login successful',
-            'token': token,
-            'user': user.to_dict()
+            'token':   token,
+            'user':    user.to_dict(),
         }), 200
-        
-    except Exception as e:
-        logger.error(f"OTP verification error: {str(e)}")
-        return jsonify({'success': False, 'error': 'OTP verification failed'}), 500
+
+    except Exception:
+        logger.error(f"[{err_id}] OTP verification error", exc_info=True)
+        return jsonify({'success': False, 'error': 'OTP verification failed', 'error_id': err_id}), 500
+
+
+# ── resend OTP ────────────────────────────────────────────────────────────────
 
 @auth_bp.route('/resend-login-otp', methods=['POST'])
 def resend_login_otp():
-    """Resend OTP during login"""
+    """Resend login OTP for an existing otp_id. No user_id accepted from caller."""
+    err_id = uuid.uuid4().hex
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
-        
+
         otp_id = data.get('otp_id')
-        user_id = data.get('user_id')
-        
-        if not otp_id or not user_id:
-            return jsonify({'success': False, 'error': 'OTP ID and user ID are required'}), 400
-        
-        result = OTPService.resend_otp(otp_id, user_id, request)
-        
+        if not otp_id:
+            return jsonify({'success': False, 'error': 'otp_id is required'}), 400
+
+        result = OTPService.resend_otp(otp_id=otp_id, request=request)
+
         if result['success']:
             return jsonify({
-                'success': True,
-                'message': result['message'],
-                'otp_id': otp_id,
-                'expires_at': result.get('expires_at')
+                'success':    True,
+                'message':    result['message'],
+                'otp_id':     otp_id,
+                'expires_at': result.get('expires_at'),
             }), 200
-        else:
-            return jsonify({'success': False, 'error': result['error']}), 400
-        
-    except Exception as e:
-        logger.error(f"Failed to resend OTP: {e}")
-        return jsonify({'success': False, 'error': 'Failed to resend OTP'}), 500
+        return jsonify({'success': False, 'error': 'Failed to resend OTP'}), 400
+
+    except Exception:
+        logger.error(f"[{err_id}] Resend OTP error", exc_info=True)
+        return jsonify({'success': False, 'error': 'Failed to resend OTP', 'error_id': err_id}), 500
+
+
+# ── logout ────────────────────────────────────────────────────────────────────
 
 @auth_bp.route('/logout', methods=['POST'])
 @jwt_required()
 def logout():
-    user_id = int(get_jwt_identity())
-    
-    log_entry = Log(
-        user_id=user_id,
-        action='logout',
-        details='User logged out',
-        ip_address=request.remote_addr,
-        user_agent=request.user_agent.string if request.user_agent else None
-    )
-    db.session.add(log_entry)
-    db.session.commit()
-    
-    return jsonify({
-        'success': True,
-        'message': 'Logout successful'
-    }), 200
+    """
+    Invalidate the current JWT by writing its JTI to the Redis blocklist (F-17).
+    TTL is set to the token's remaining lifetime so the entry self-expires.
+    """
+    err_id = uuid.uuid4().hex
+    try:
+        user_id     = int(get_jwt_identity())
+        jwt_payload = get_jwt()
+        jti = jwt_payload.get('jti', '')
+        exp = jwt_payload.get('exp', 0)
+        ttl = max(int(exp - datetime.now(timezone.utc).timestamp()), 0)
+
+        if jti and ttl > 0:
+            try:
+                _redis_client().setex(f'jwt_blocklist:{jti}', ttl, 'revoked')
+            except Exception as redis_err:
+                logger.error(f"[{err_id}] Redis blocklist write failed: {redis_err}")
+
+        _log(user_id, 'logout', 'User logged out')
+        db.session.commit()
+
+        return jsonify({'success': True, 'message': 'Logout successful'}), 200
+
+    except Exception:
+        logger.error(f"[{err_id}] Logout error", exc_info=True)
+        return jsonify({'success': False, 'error': 'Logout failed', 'error_id': err_id}), 500
+
+
+# ── verify token ──────────────────────────────────────────────────────────────
 
 @auth_bp.route('/verify', methods=['GET'])
 @jwt_required()
 def verify_token():
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-    
-    if not user:
-        return jsonify({'success': False, 'error': 'User not found'}), 404
-    
-    return jsonify({
-        'success': True,
-        'message': 'Token is valid',
-        'user': user.to_dict()
-    }), 200
+    """Confirm the current JWT is valid and return user info."""
+    err_id = uuid.uuid4().hex
+    try:
+        user = db.session.get(User, int(get_jwt_identity()))
+        if not user:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+        return jsonify({'success': True, 'message': 'Token is valid', 'user': user.to_dict()}), 200
+    except Exception:
+        logger.error(f"[{err_id}] Token verify error", exc_info=True)
+        return jsonify({'success': False, 'error': 'Verification failed', 'error_id': err_id}), 500

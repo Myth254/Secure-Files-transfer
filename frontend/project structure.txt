@@ -1,0 +1,36 @@
+vaultsync/
+├── index.html           — pure HTML structure, zero JS/CSS
+├── html/
+|    ├── login.html            — login form
+|    ├── register.html         — registration form + strength meter
+|    ├── otp.html              — 6-digit OTP inputs + timer
+|    ├── key-backup.html       — private key display + confirm
+|    ├── sidebar.html          — nav, user pill
+|    ├── page-files.html       — files list + stats
+|    ├── page-sharing.html     — tabs, share cards, share stats
+|    ├── page-monitoring.html   — metric cards, alerts, alert rules
+|    ├── page-profile.html     — profile form, security info, activity log
+|    └── modals.html           — all 5 modals in one file
+├── css/
+│   ├── tokens.css       — all CSS custom properties
+│   ├── base.css         — reset, typography, keyframes, utilities
+│   ├── layout.css       — sidebar, topbar, auth card, dashboard shell
+│   ├── components.css   — buttons, forms, alerts, toasts, modals, tables, badges
+│   └── pages.css        — auth views, file list, sharing, monitoring, profile
+└── js/
+    ├── api.js           — API_BASE config, state object, fetch helpers
+    ├── ui.js            — toasts, modals, loading states, formatting, router
+    ├── auth.js          — login, OTP, register, key backup, logout
+    ├── files.js         — list, upload, download, delete, search, pagination
+    ├── sharing.js       — share requests, accept/reject/revoke, stats
+    ├── monitoring.js    — metric cards, alert rules, polling, WebSocket stub
+    ├── profile.js       — profile update, activity log, public key viewer
+    └── app.js           — entry point, calls init()
+
+
+index.html              (104 lines)  — shell only, mount points + script tags
+
+
+
+js/
+└── loader.js           ( 88 lines)  — fetches partials, fires 'partialsReady'

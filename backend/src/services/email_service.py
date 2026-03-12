@@ -2,12 +2,13 @@
 Email Service for Sending OTP Codes
 """
 import os
+import ssl
 import smtplib
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Dict, Any
-from jinja2 import Template
+from typing import Optional
+from jinja2 import Environment
 
 logger = logging.getLogger(__name__)
 
@@ -23,19 +24,30 @@ class EmailService:
     APP_NAME = os.environ.get('APP_NAME', 'Secure File Transfer')
     
     @classmethod
-    def send_otp_email(cls, email: str, otp_code: str, purpose: str, username: str = None) -> bool:
+    def send_otp_email(cls, email: str, otp_code: str, purpose: str, username: Optional[str] = None) -> bool:
         """
-        Send OTP code via email
-        
+        Send OTP code via email.
+
+        The otp_code parameter is the plaintext value needed to put in the
+        email body.  It must NEVER be written to any log line in this method.
+
         Args:
             email: Recipient email address
-            otp_code: 6-digit OTP code
+            otp_code: 6-digit OTP code (used only in email body, never logged)
             purpose: Purpose of OTP (login, download, etc.)
             username: Recipient username (optional)
-            
+
         Returns:
             bool: True if email sent successfully
         """
+        # Guard: refuse to attempt an anonymous relay if credentials are missing
+        if not cls.SMTP_USERNAME or not cls.SMTP_PASSWORD:
+            logger.warning(
+                "SMTP_USERNAME or SMTP_PASSWORD is not configured. "
+                "Cannot send OTP email — aborting to avoid open relay."
+            )
+            return False
+
         try:
             # Create message
             msg = MIMEMultipart('alternative')
@@ -51,13 +63,14 @@ class EmailService:
             msg.attach(MIMEText(text_content, 'plain'))
             msg.attach(MIMEText(html_content, 'html'))
             
-            # Send email
+            # Send email with verified TLS — do not skip certificate validation
+            context = ssl.create_default_context()
             with smtplib.SMTP(cls.SMTP_HOST, cls.SMTP_PORT) as server:
-                server.starttls()
-                if cls.SMTP_USERNAME and cls.SMTP_PASSWORD:
-                    server.login(cls.SMTP_USERNAME, cls.SMTP_PASSWORD)
+                server.starttls(context=context)
+                server.login(cls.SMTP_USERNAME, cls.SMTP_PASSWORD)
                 server.send_message(msg)
             
+            # Log success without revealing the OTP value
             logger.info(f"OTP email sent to {email} for purpose: {purpose}")
             return True
             
@@ -66,8 +79,8 @@ class EmailService:
             return False
     
     @classmethod
-    def _get_email_template(cls, otp_code: str, purpose: str, username: str = None) -> str:
-        """Get HTML email template"""
+    def _get_email_template(cls, otp_code: str, purpose: str, username: Optional[str] = None) -> str:
+        """Get HTML email template with auto-escaping enabled to prevent XSS"""
         purpose_display = {
             'login': 'Login Verification',
             'file_download': 'File Download Verification',
@@ -77,7 +90,9 @@ class EmailService:
             'verify_email': 'Email Verification'
         }.get(purpose, 'Verification')
         
-        template = Template("""
+        # Use Environment with autoescape=True so all {{ variables }} are HTML-escaped
+        env = Environment(autoescape=True)
+        template = env.from_string("""
         <!DOCTYPE html>
         <html>
         <head>
@@ -218,7 +233,7 @@ class EmailService:
         )
     
     @classmethod
-    def _get_text_template(cls, otp_code: str, purpose: str, username: str = None) -> str:
+    def _get_text_template(cls, otp_code: str, purpose: str, username: Optional[str] = None) -> str:
         """Get plain text email template"""
         purpose_display = {
             'login': 'Login Verification',
@@ -237,7 +252,7 @@ class EmailService:
 
 Hello{f' {username}' if username else ''},
 
-We received a request for {purpose_display.lower()}. 
+We received a request for {purpose_display.lower()}.
 Your OTP code is:
 
 🔐 {otp_code}
@@ -252,4 +267,4 @@ If you didn't request this code, please ignore this email.
 This is an automated message, please do not reply.
 © 2026 {cls.APP_NAME}. All rights reserved.
         """
-        return text
+        return text.strip()

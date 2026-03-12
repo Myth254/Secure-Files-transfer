@@ -93,35 +93,35 @@ class FileUploadError(FileError):
     
     def __init__(self, message: str = "File upload failed", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 400, details)
+        super().__init__(message, details=details)
 
 class FileDownloadError(FileError):
     """Raised when file download fails"""
     
     def __init__(self, message: str = "File download failed", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 400, details)
+        super().__init__(message, details=details)
 
 class FileDeleteError(FileError):
     """Raised when file deletion fails"""
     
     def __init__(self, message: str = "File deletion failed", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 400, details)
+        super().__init__(message, details=details)
 
 class FileSizeExceededError(FileError):
     """Raised when file size exceeds limit"""
     
     def __init__(self, message: str = "File size exceeds maximum allowed", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 400, details)
+        super().__init__(message, details=details)
 
 class InvalidFileTypeError(FileError):
     """Raised when file type is not allowed"""
     
     def __init__(self, message: str = "File type not allowed", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 400, details)
+        super().__init__(message, details=details)
 
 # ============================================
 # Sharing Errors - FIXED: Added ShareError
@@ -146,35 +146,35 @@ class ShareRequestExistsError(ShareError):
     
     def __init__(self, message: str = "Share request already exists", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 400, details)
+        super().__init__(message, details=details)
 
 class SharePermissionError(ShareError, AuthorizationError):
     """Raised when user doesn't have permission to share"""
     
     def __init__(self, message: str = "You don't have permission to share this file", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 403, details)
+        super().__init__(message, details=details)
 
 class ShareAccessDeniedError(ShareError, AuthorizationError):
     """Raised when user doesn't have access to shared file"""
     
     def __init__(self, message: str = "You don't have access to this shared file", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 403, details)
+        super().__init__(message, details=details)
 
 class ShareExpiredError(ShareError):
     """Raised when share has expired"""
     
     def __init__(self, message: str = "Share has expired", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 403, details)
+        super().__init__(message, details=details)
 
 class ShareRevokedError(ShareError):
     """Raised when share has been revoked"""
     
     def __init__(self, message: str = "Share has been revoked", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 403, details)
+        super().__init__(message, details=details)
 
 # ============================================
 # OTP Errors
@@ -199,35 +199,35 @@ class OTPInvalidError(OTPError):
     
     def __init__(self, message: str = "Invalid OTP code", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 401, details)
+        super().__init__(message, details=details)
 
 class OTPExpiredError(OTPError):
     """Raised when OTP has expired"""
     
     def __init__(self, message: str = "OTP has expired", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 401, details)
+        super().__init__(message, details=details)
 
 class OTPUsedError(OTPError):
     """Raised when OTP has already been used"""
     
     def __init__(self, message: str = "OTP has already been used", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 400, details)
+        super().__init__(message, details=details)
 
 class OTPMaxAttemptsError(OTPError):
     """Raised when maximum OTP attempts exceeded"""
     
     def __init__(self, message: str = "Maximum OTP attempts exceeded", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 429, details)
+        super().__init__(message, details=details)
 
 class OTPUserMismatchError(OTPError):
     """Raised when OTP doesn't belong to user"""
     
     def __init__(self, message: str = "OTP does not belong to this user", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 403, details)
+        super().__init__(message, details=details)
 
 # ============================================
 # Encryption Errors
@@ -245,14 +245,14 @@ class DecryptionError(EncryptionError):
     
     def __init__(self, message: str = "Decryption failed", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 500, details)
+        super().__init__(message, details=details)
 
 class KeyGenerationError(EncryptionError):
     """Raised when key generation fails"""
     
     def __init__(self, message: str = "Key generation failed", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 500, details)
+        super().__init__(message, details=details)
 
 # ============================================
 # Database Errors
@@ -270,7 +270,7 @@ class IntegrityError(DatabaseError):
     
     def __init__(self, message: str = "Data integrity violation", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 400, details)
+        super().__init__(message, details=details)
 
 # ============================================
 # Email Errors
@@ -288,7 +288,7 @@ class EmailSendError(EmailError):
     
     def __init__(self, message: str = "Failed to send email", 
                  details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, 500, details)
+        super().__init__(message, details=details)
 
 # ============================================
 # Rate Limiting Errors

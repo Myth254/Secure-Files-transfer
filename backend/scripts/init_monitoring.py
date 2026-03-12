@@ -3,7 +3,6 @@
 Initialize Monitoring System
 Run this script to set up monitoring tables and default data
 """
-import os
 import sys
 from pathlib import Path
 

@@ -1,0 +1,161 @@
+<!-- ═══════════════════════════════════════════════════
+     PAGE: PROFILE / SETTINGS
+     Loaded by: js/loader.js → #pagProfile
+════════════════════════════════════════════════════ -->
+<div id="pagProfile" class="hidden">
+
+  <div class="page-header">
+    <div class="page-header-left">
+      <h2>Account Settings</h2>
+      <p>Manage your profile and security</p>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem">
+
+    <!-- ── Profile update card ── -->
+    <div class="card">
+      <div class="card-header" style="padding-bottom:1rem">
+        <div class="card-title">Profile Information</div>
+      </div>
+      <div class="card-body">
+
+        <!-- Avatar + name summary -->
+        <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem">
+          <div class="user-avatar" id="profileAvatar"
+            style="width:52px;height:52px;font-size:1.25rem">?</div>
+          <div>
+            <div style="font-weight:700;font-size:1.1rem;color:var(--text-primary)"
+              id="profileName">—</div>
+            <div class="text-sm text-muted" id="profileEmail">—</div>
+            <div class="text-xs text-muted mt-1" id="profileCreated">—</div>
+          </div>
+        </div>
+
+        <div id="profileUpdateAlert" class="alert hidden"
+          style="margin-bottom:1rem"></div>
+
+        <div class="form-stack">
+          <div class="form-group">
+            <label class="form-label">New Email</label>
+            <input type="email" id="profileNewEmail" class="form-input"
+              placeholder="New email address">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Current Password</label>
+            <input type="password" id="profileCurrentPass" class="form-input"
+              placeholder="Required for any changes">
+          </div>
+          <div class="form-group">
+            <label class="form-label">New Password</label>
+            <div class="input-wrapper">
+              <input type="password" id="profileNewPass" class="form-input"
+                placeholder="Leave blank to keep current">
+              <span class="input-suffix"
+                onclick="togglePasswordVisibility('profileNewPass', this)">👁</span>
+            </div>
+          </div>
+          <button class="btn btn-primary"
+            onclick="handleProfileUpdate()">Save Changes</button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Security info card ── -->
+    <div class="card">
+      <div class="card-header" style="padding-bottom:1rem">
+        <div class="card-title">Security Information</div>
+      </div>
+      <div class="card-body">
+        <div class="flex flex-col gap-3">
+
+          <div class="flex justify-between items-center"
+            style="padding:.625rem 0; border-bottom:1px solid var(--border-subtle)">
+            <div>
+              <div class="text-sm font-bold"
+                style="color:var(--text-primary)">Encryption</div>
+              <div class="text-xs text-muted">File encryption method</div>
+            </div>
+            <span class="badge badge-green">RSA-2048 + AES-256</span>
+          </div>
+
+          <div class="flex justify-between items-center"
+            style="padding:.625rem 0; border-bottom:1px solid var(--border-subtle)">
+            <div>
+              <div class="text-sm font-bold"
+                style="color:var(--text-primary)">2FA Status</div>
+              <div class="text-xs text-muted">Email OTP on every login</div>
+            </div>
+            <span class="badge badge-green">✓ Active</span>
+          </div>
+
+          <div class="flex justify-between items-center"
+            style="padding:.625rem 0; border-bottom:1px solid var(--border-subtle)">
+            <div>
+              <div class="text-sm font-bold"
+                style="color:var(--text-primary)">Session Expiry</div>
+              <div class="text-xs text-muted">JWT access token lifetime</div>
+            </div>
+            <span class="font-mono text-xs text-secondary">1 hour</span>
+          </div>
+
+          <div class="flex justify-between items-center"
+            style="padding:.625rem 0">
+            <div>
+              <div class="text-sm font-bold"
+                style="color:var(--text-primary)">Public Key</div>
+              <div class="text-xs text-muted">RSA public key fingerprint</div>
+            </div>
+            <button class="btn btn-secondary btn-sm"
+              onclick="showPublicKey()">View Key</button>
+          </div>
+
+        </div>
+
+        <div class="alert alert-info" style="margin-top:1rem">
+          <span class="alert-icon">ℹ</span>
+          <div class="alert-content">
+            <div class="alert-title">Zero-Knowledge Design</div>
+            <div class="text-xs">
+              Files are encrypted client-side. Your private key is
+              encrypted with your password and only you can decrypt it.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Activity log (full width) ── -->
+    <div class="card" style="grid-column:1 / -1">
+      <div class="card-header">
+        <div class="card-title">Recent Activity</div>
+        <button class="btn btn-secondary btn-sm"
+          onclick="loadActivity()">↻ Refresh</button>
+      </div>
+      <div class="card-body" style="padding:0">
+        <div class="table-wrap" style="border:none; border-radius:0">
+          <table>
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Details</th>
+                <th>IP Address</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="activityBody">
+              <tr>
+                <td colspan="4" class="table-empty">
+                  <div class="table-empty-text">Loading activity…</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>

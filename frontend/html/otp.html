@@ -1,0 +1,62 @@
+<!-- ═══════════════════════════════════════════════════
+     VIEW: OTP VERIFICATION
+     Loaded by: js/loader.js → #viewOTP
+════════════════════════════════════════════════════ -->
+<div id="viewOTP" class="auth-layout hidden">
+  <div class="auth-card">
+
+    <div class="otp-header">
+      <div style="font-size:2.5rem; margin-bottom:0.75rem">📧</div>
+      <h2 style="font-size:1.3rem">Check Your Email</h2>
+      <div class="otp-email-hint">
+        We sent a 6-digit code to<br>
+        <strong id="otpEmailDisplay">your email</strong>
+      </div>
+    </div>
+
+    <div id="otpAlert" class="alert alert-error hidden"
+      style="margin-bottom:1rem">
+      <span class="alert-icon">⚠</span>
+      <div class="alert-content"><div id="otpAlertMsg"></div></div>
+    </div>
+
+    <!-- Six individual digit inputs -->
+    <div class="otp-group" id="otpInputs">
+      <input type="number" class="otp-input"
+        maxlength="1" min="0" max="9" oninput="otpInput(this,0)">
+      <input type="number" class="otp-input"
+        maxlength="1" min="0" max="9" oninput="otpInput(this,1)">
+      <input type="number" class="otp-input"
+        maxlength="1" min="0" max="9" oninput="otpInput(this,2)">
+      <input type="number" class="otp-input"
+        maxlength="1" min="0" max="9" oninput="otpInput(this,3)">
+      <input type="number" class="otp-input"
+        maxlength="1" min="0" max="9" oninput="otpInput(this,4)">
+      <input type="number" class="otp-input"
+        maxlength="1" min="0" max="9" oninput="otpInput(this,5)">
+    </div>
+
+    <div class="otp-timer ok" id="otpTimer">Expires in 10:00</div>
+    <div class="otp-attempts"   id="otpAttempts">3 attempts remaining</div>
+
+    <button class="btn btn-primary btn-full mt-4"
+      id="verifyOtpBtn" onclick="handleVerifyOTP()">
+      Verify Code
+    </button>
+
+    <div class="text-center mt-3">
+      <button class="btn btn-ghost btn-sm"
+        id="resendOtpBtn" onclick="handleResendOTP()">
+        Resend code
+      </button>
+    </div>
+
+    <div class="text-center mt-2">
+      <button class="btn btn-ghost btn-sm text-muted"
+        onclick="showView('viewLogin')">
+        ← Back to Login
+      </button>
+    </div>
+
+  </div>
+</div>

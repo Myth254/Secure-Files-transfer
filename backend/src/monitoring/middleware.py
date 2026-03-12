@@ -3,12 +3,15 @@ Request/Response Monitoring Middleware
 """
 import time
 import uuid
-from flask import request, g
 from src.extensions import db
 from src.models.monitoring import ApiRequestLog
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Sensitive query-parameter names whose values must be redacted from logs
+_SENSITIVE_PARAMS = frozenset({'token', 'key', 'password', 'secret', 'api_key', 'apikey'})
+
 
 class MonitoringMiddleware:
     """Monitor all HTTP requests"""
@@ -21,12 +24,10 @@ class MonitoringMiddleware:
         request_id = str(uuid.uuid4())
         start_time = time.time()
         
-        # Store in environ for later use
         environ['REQUEST_ID'] = request_id
         environ['REQUEST_START_TIME'] = start_time
         
         def custom_start_response(status, headers, exc_info=None):
-            # Calculate response time
             end_time = time.time()
             response_time = (end_time - start_time) * 1000  # ms
             
@@ -34,11 +35,11 @@ class MonitoringMiddleware:
                 from flask import request
                 from flask_jwt_extended import get_jwt_identity
                 
-                # Get user ID if authenticated
+                # Get user ID if authenticated; silently ignore any auth errors
                 user_id = None
                 try:
                     user_id = int(get_jwt_identity())
-                except:
+                except Exception:
                     pass
                 
                 # Get request size
@@ -46,13 +47,20 @@ class MonitoringMiddleware:
                 if request.data:
                     request_size = len(request.data)
                 
+                # Redact sensitive query parameters before persisting to the log
+                safe_params = {
+                    k: '***' if k.lower() in _SENSITIVE_PARAMS else v
+                    for k, v in request.args.items()
+                }
+                query_params = str(safe_params)
+                
                 # Save API log
                 log = ApiRequestLog(
                     request_id=request_id,
                     user_id=user_id,
                     method=request.method,
                     endpoint=request.path,
-                    query_params=str(request.args),
+                    query_params=query_params,
                     status_code=int(status.split()[0]),
                     response_time=response_time,
                     ip_address=request.remote_addr,
@@ -89,7 +97,6 @@ class MetricsMiddleware:
             end_time = time.time()
             response_time = (end_time - start_time) * 1000
             
-            # Add response time header
             headers.append(('X-Response-Time', f'{response_time:.2f}ms'))
             
             return start_response(status, headers, exc_info)

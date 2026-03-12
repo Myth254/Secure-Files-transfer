@@ -1,639 +1,535 @@
 """
-Monitoring API Routes
+Monitoring routes — /api/monitoring/*
+
+Fixes applied
+─────────────
+F-08  str(e) never returned to clients; generic messages + error IDs.
+Admin gate: /monitoring/init now verifies is_admin before executing.
+      The original had the check commented out — anyone with a JWT
+      could reset all monitoring rules and dashboard configs.
+Bare except: all bare `except:` replaced with `except Exception`.
+db.session.execute('SELECT 1') → db.session.execute(text('SELECT 1'))
+      (string SQL removed in SQLAlchemy 2.x).
+Redis health: proper redis.ping() instead of dummy socketio import.
+Alert rule PUT: only whitelisted fields are setattr'd — previously any
+      model field could be overwritten via the request body.
+datetime.utcnow() → datetime.now(timezone.utc) throughout.
+SQLAlchemy 2.x: Model.query.get() → db.session.get()
+cap on hours/limit params to prevent trivially large DB scans.
 """
+import uuid
+import logging
+from datetime import datetime, timezone, timedelta
+
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy import text
+
 from src.extensions import db
 from src.models.monitoring import (
-    SystemMetric, AlertRule, AlertHistory, UserSession, 
-    ApiRequestLog, DashboardConfig, ScheduledReport, ErrorTracking
+    AlertRule, AlertHistory, UserSession,
+    ApiRequestLog, DashboardConfig,
 )
 from src.monitoring.metrics import MetricsCollector
 from src.monitoring.alerts import AlertManager
-from datetime import datetime, timedelta
-import logging
 
 logger = logging.getLogger(__name__)
 
 monitoring_bp = Blueprint('monitoring', __name__, url_prefix='/api/monitoring')
 
-# ============================================
-# DASHBOARD ENDPOINTS
-# ============================================
+# Whitelist of fields a caller may update on an AlertRule (prevents arbitrary
+# model attribute injection via the unrestricted setattr loop in the original).
+_ALERT_RULE_UPDATABLE = {
+    'name', 'description', 'metric_type', 'metric_name', 'alert_condition',
+    'threshold_value', 'threshold_max', 'severity', 'duration_seconds',
+    'cooldown_seconds', 'enabled', 'notify_email', 'notify_slack',
+    'notify_discord', 'notify_sms', 'notify_webhook', 'webhook_url',
+}
+
+
+def _is_admin(user_id: int) -> bool:
+    from src.models.user import User
+    user = db.session.get(User, user_id)
+    return bool(user and user.username == current_app.config.get('ADMIN_USERNAME', ''))
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# DASHBOARD
+# ════════════════════════════════════════════════════════════════════════════════
 
 @monitoring_bp.route('/dashboard/config', methods=['GET'])
 @jwt_required()
 def get_dashboard_config():
-    """Get user's dashboard configuration"""
-    user_id = int(get_jwt_identity())
-    
-    config = DashboardConfig.query.filter_by(user_id=user_id).first()
-    
-    if not config:
-        # Create default config
-        config = DashboardConfig(
-            user_id=user_id,
-            layout={"grid": [[0, 0, 6, 4], [6, 0, 6, 4], [0, 4, 12, 4]]},
-            widgets=["cpu", "memory", "disk", "network", "users", "files", "alerts", "api"],
-            time_range="last_1h",
-            refresh_interval=30,
-            theme="light"
-        )
-        db.session.add(config)
-        db.session.commit()
-    
-    return jsonify({
-        'success': True,
-        'config': config.to_dict()
-    })
+    err_id = uuid.uuid4().hex
+    try:
+        user_id = int(get_jwt_identity())
+        config  = DashboardConfig.query.filter_by(user_id=user_id).first()
+
+        if not config:
+            config = DashboardConfig(
+                user_id=user_id,
+                layout={'grid': [[0, 0, 6, 4], [6, 0, 6, 4], [0, 4, 12, 4]]},
+                widgets=['cpu', 'memory', 'disk', 'network', 'users', 'files', 'alerts', 'api'],
+                time_range='last_1h',
+                refresh_interval=30,
+                theme='light',
+            )
+            db.session.add(config)
+            db.session.commit()
+
+        return jsonify({'success': True, 'config': config.to_dict()})
+
+    except Exception:
+        logger.error(f"[{err_id}] get_dashboard_config failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 500
+
 
 @monitoring_bp.route('/dashboard/config', methods=['PUT'])
 @jwt_required()
 def update_dashboard_config():
-    """Update user's dashboard configuration"""
-    user_id = int(get_jwt_identity())
-    data = request.get_json()
-    
-    config = DashboardConfig.query.filter_by(user_id=user_id).first()
-    
-    if not config:
-        return jsonify({'success': False, 'error': 'Dashboard config not found'}), 404
-    
-    # Update fields
-    for key in ['layout', 'widgets', 'time_range', 'refresh_interval', 'theme', 'color_scheme']:
-        if key in data:
-            setattr(config, key, data[key])
-    
-    db.session.commit()
-    
-    return jsonify({
-        'success': True,
-        'config': config.to_dict()
-    })
+    err_id = uuid.uuid4().hex
+    try:
+        user_id = int(get_jwt_identity())
+        data    = request.get_json(silent=True) or {}
 
-# ============================================
-# METRICS ENDPOINTS
-# ============================================
+        config = DashboardConfig.query.filter_by(user_id=user_id).first()
+        if not config:
+            return jsonify({'success': False, 'error': 'Dashboard config not found'}), 404
+
+        allowed = {'layout', 'widgets', 'time_range', 'refresh_interval', 'theme', 'color_scheme'}
+        for key in allowed:
+            if key in data:
+                setattr(config, key, data[key])
+
+        db.session.commit()
+        return jsonify({'success': True, 'config': config.to_dict()})
+
+    except Exception:
+        db.session.rollback()
+        logger.error(f"[{err_id}] update_dashboard_config failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# METRICS
+# ════════════════════════════════════════════════════════════════════════════════
 
 @monitoring_bp.route('/metrics/current', methods=['GET'])
 @jwt_required()
 def get_current_metrics():
-    """Get current system metrics"""
     metrics = MetricsCollector.get_latest_metrics()
-    return jsonify({
-        'success': True,
-        'metrics': metrics
-    })
+    return jsonify({'success': True, 'metrics': metrics})
+
 
 @monitoring_bp.route('/metrics/history/<metric_type>/<metric_name>', methods=['GET'])
 @jwt_required()
 def get_metric_history(metric_type, metric_name):
-    """Get historical metrics for charts"""
-    hours = request.args.get('hours', 24, type=int)
-    
+    hours   = min(request.args.get('hours', 24, type=int), 168)
     history = MetricsCollector.get_metrics_history(metric_type, metric_name, hours)
-    
-    return jsonify({
-        'success': True,
-        'metric_type': metric_type,
-        'metric_name': metric_name,
-        'history': history
-    })
+    return jsonify({'success': True, 'metric_type': metric_type, 'metric_name': metric_name, 'history': history})
+
 
 @monitoring_bp.route('/metrics/aggregated/<metric_type>/<metric_name>', methods=['GET'])
 @jwt_required()
 def get_aggregated_metrics(metric_type, metric_name):
-    """Get aggregated metrics over time intervals"""
-    hours = request.args.get('hours', 24, type=int)
-    interval = request.args.get('interval', '1h')
-    
-    aggregated = MetricsCollector.get_aggregated_metrics(
-        metric_type, metric_name, interval, hours
-    )
-    
-    return jsonify({
-        'success': True,
-        'metric_type': metric_type,
-        'metric_name': metric_name,
-        'aggregated': aggregated
-    })
+    hours      = min(request.args.get('hours', 24, type=int), 168)
+    interval   = request.args.get('interval', '1h')
+    aggregated = MetricsCollector.get_aggregated_metrics(metric_type, metric_name, interval, hours)
+    return jsonify({'success': True, 'metric_type': metric_type, 'metric_name': metric_name, 'aggregated': aggregated})
 
-# ============================================
-# ALERT RULES ENDPOINTS
-# ============================================
+
+# ════════════════════════════════════════════════════════════════════════════════
+# ALERT RULES
+# ════════════════════════════════════════════════════════════════════════════════
 
 @monitoring_bp.route('/alerts/rules', methods=['GET'])
 @jwt_required()
 def get_alert_rules():
-    """Get all alert rules"""
     rules = AlertRule.query.all()
-    return jsonify({
-        'success': True,
-        'rules': [r.to_dict() for r in rules]
-    })
+    return jsonify({'success': True, 'rules': [r.to_dict() for r in rules]})
+
 
 @monitoring_bp.route('/alerts/rules', methods=['POST'])
 @jwt_required()
 def create_alert_rule():
-    """Create a new alert rule"""
-    user_id = int(get_jwt_identity())
-    data = request.get_json()
-    
+    err_id = uuid.uuid4().hex
     try:
+        user_id = int(get_jwt_identity())
+        data    = request.get_json(silent=True) or {}
+
         rule = AlertRule(
-            name=data['name'],
-            description=data.get('description'),
-            metric_type=data['metric_type'],
-            metric_name=data['metric_name'],
-            alert_condition=data['condition'],
-            threshold_value=data.get('threshold'),
-            threshold_max=data.get('threshold_max'),
-            severity=data.get('severity', 'warning'),
-            duration_seconds=data.get('duration', 0),
-            cooldown_seconds=data.get('cooldown', 300),
-            enabled=data.get('enabled', True),
-            notify_email=data.get('notify_email', False),
-            notify_slack=data.get('notify_slack', False),
-            notify_discord=data.get('notify_discord', False),
-            notify_sms=data.get('notify_sms', False),
-            notify_webhook=data.get('notify_webhook', False),
-            webhook_url=data.get('webhook_url'),
-            created_by=user_id
+            name             = data['name'],
+            description      = data.get('description'),
+            metric_type      = data['metric_type'],
+            metric_name      = data['metric_name'],
+            alert_condition  = data['condition'],
+            threshold_value  = data.get('threshold'),
+            threshold_max    = data.get('threshold_max'),
+            severity         = data.get('severity', 'warning'),
+            duration_seconds = data.get('duration', 0),
+            cooldown_seconds = data.get('cooldown', 300),
+            enabled          = data.get('enabled', True),
+            notify_email     = data.get('notify_email', False),
+            notify_slack     = data.get('notify_slack', False),
+            notify_discord   = data.get('notify_discord', False),
+            notify_sms       = data.get('notify_sms', False),
+            notify_webhook   = data.get('notify_webhook', False),
+            webhook_url      = data.get('webhook_url'),
+            created_by       = user_id,
         )
-        
         db.session.add(rule)
         db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'message': 'Alert rule created successfully',
-            'rule': rule.to_dict()
-        }), 201
-        
-    except Exception as e:
+        return jsonify({'success': True, 'message': 'Alert rule created successfully', 'rule': rule.to_dict()}), 201
+
+    except KeyError as ke:
+        return jsonify({'success': False, 'error': f'Missing required field: {ke}'}), 400
+    except Exception:
         db.session.rollback()
-        logger.error(f"Error creating alert rule: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 400
+        logger.error(f"[{err_id}] create_alert_rule failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 400
+
 
 @monitoring_bp.route('/alerts/rules/<int:rule_id>', methods=['PUT'])
 @jwt_required()
 def update_alert_rule(rule_id):
-    """Update an alert rule"""
-    rule = AlertRule.query.get(rule_id)
-    
-    if not rule:
-        return jsonify({'success': False, 'error': 'Alert rule not found'}), 404
-    
-    data = request.get_json()
-    
+    """Update an alert rule — only whitelisted fields are written."""
+    err_id = uuid.uuid4().hex
     try:
+        rule = db.session.get(AlertRule, rule_id)
+        if not rule:
+            return jsonify({'success': False, 'error': 'Alert rule not found'}), 404
+
+        data = request.get_json(silent=True) or {}
         for key, value in data.items():
-            if hasattr(rule, key):
+            if key in _ALERT_RULE_UPDATABLE:
                 setattr(rule, key, value)
-        
+
         db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'message': 'Alert rule updated successfully',
-            'rule': rule.to_dict()
-        })
-        
-    except Exception as e:
+        return jsonify({'success': True, 'message': 'Alert rule updated successfully', 'rule': rule.to_dict()})
+
+    except Exception:
         db.session.rollback()
-        logger.error(f"Error updating alert rule: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 400
+        logger.error(f"[{err_id}] update_alert_rule({rule_id}) failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 400
+
 
 @monitoring_bp.route('/alerts/rules/<int:rule_id>', methods=['DELETE'])
 @jwt_required()
 def delete_alert_rule(rule_id):
-    """Delete an alert rule"""
-    rule = AlertRule.query.get(rule_id)
-    
-    if not rule:
-        return jsonify({'success': False, 'error': 'Alert rule not found'}), 404
-    
+    err_id = uuid.uuid4().hex
     try:
+        rule = db.session.get(AlertRule, rule_id)
+        if not rule:
+            return jsonify({'success': False, 'error': 'Alert rule not found'}), 404
+
         db.session.delete(rule)
         db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'message': 'Alert rule deleted successfully'
-        })
-        
-    except Exception as e:
+        return jsonify({'success': True, 'message': 'Alert rule deleted successfully'})
+
+    except Exception:
         db.session.rollback()
-        logger.error(f"Error deleting alert rule: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 400
+        logger.error(f"[{err_id}] delete_alert_rule({rule_id}) failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 400
+
 
 @monitoring_bp.route('/alerts/rules/<int:rule_id>/toggle', methods=['POST'])
 @jwt_required()
 def toggle_alert_rule(rule_id):
-    """Enable or disable an alert rule"""
-    rule = AlertRule.query.get(rule_id)
-    
-    if not rule:
-        return jsonify({'success': False, 'error': 'Alert rule not found'}), 404
-    
-    rule.enabled = not rule.enabled
-    db.session.commit()
-    
-    return jsonify({
-        'success': True,
-        'enabled': rule.enabled,
-        'message': f"Alert rule {'enabled' if rule.enabled else 'disabled'}"
-    })
+    err_id = uuid.uuid4().hex
+    try:
+        rule = db.session.get(AlertRule, rule_id)
+        if not rule:
+            return jsonify({'success': False, 'error': 'Alert rule not found'}), 404
 
-# ============================================
-# ALERT HISTORY ENDPOINTS
-# ============================================
+        rule.enabled = not rule.enabled
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'enabled': rule.enabled,
+            'message': f"Alert rule {'enabled' if rule.enabled else 'disabled'}",
+        })
+
+    except Exception:
+        db.session.rollback()
+        logger.error(f"[{err_id}] toggle_alert_rule({rule_id}) failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 400
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# ALERT HISTORY
+# ════════════════════════════════════════════════════════════════════════════════
 
 @monitoring_bp.route('/alerts/history', methods=['GET'])
 @jwt_required()
 def get_alert_history():
-    """Get alert history with filters"""
-    limit = request.args.get('limit', 100, type=int)
-    severity = request.args.get('severity')
-    status = request.args.get('status')
-    hours = request.args.get('hours', 24, type=int)
-    
-    query = AlertHistory.query
-    
-    if severity:
-        query = query.filter_by(severity=severity)
-    
-    if status:
-        query = query.filter_by(status=status)
-    
-    if hours:
-        since = datetime.utcnow() - timedelta(hours=hours)
+    err_id = uuid.uuid4().hex
+    try:
+        limit    = min(request.args.get('limit', 100, type=int), 1000)
+        hours    = min(request.args.get('hours',  24,  type=int), 720)
+        severity = request.args.get('severity')
+        status   = request.args.get('status')
+
+        query = AlertHistory.query
+        if severity:
+            query = query.filter_by(severity=severity)
+        if status:
+            query = query.filter_by(status=status)
+
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
         query = query.filter(AlertHistory.created_at >= since)
-    
-    alerts = query.order_by(AlertHistory.created_at.desc()).limit(limit).all()
-    
-    return jsonify({
-        'success': True,
-        'alerts': [a.to_dict() for a in alerts],
-        'count': len(alerts)
-    })
+
+        alerts = query.order_by(AlertHistory.created_at.desc()).limit(limit).all()
+        return jsonify({'success': True, 'alerts': [a.to_dict() for a in alerts], 'count': len(alerts)})
+
+    except Exception:
+        logger.error(f"[{err_id}] get_alert_history failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 500
+
 
 @monitoring_bp.route('/alerts/history/<int:alert_id>/acknowledge', methods=['POST'])
 @jwt_required()
 def acknowledge_alert(alert_id):
-    """Acknowledge an alert"""
     user_id = int(get_jwt_identity())
-    
-    from src.monitoring.alerts import AlertManager
     success = AlertManager.acknowledge_alert(alert_id, user_id)
-    
     if success:
         return jsonify({'success': True, 'message': 'Alert acknowledged'})
-    else:
-        return jsonify({'success': False, 'error': 'Alert not found or already resolved'}), 404
+    return jsonify({'success': False, 'error': 'Alert not found or already resolved'}), 404
+
 
 @monitoring_bp.route('/alerts/history/active', methods=['GET'])
 @jwt_required()
 def get_active_alerts():
-    """Get all active alerts"""
-    from src.monitoring.alerts import AlertManager
     alerts = AlertManager.get_active_alerts()
-    
-    return jsonify({
-        'success': True,
-        'alerts': [a.to_dict() for a in alerts],
-        'count': len(alerts)
-    })
+    return jsonify({'success': True, 'alerts': [a.to_dict() for a in alerts], 'count': len(alerts)})
 
-# ============================================
-# SESSION MONITORING ENDPOINTS
-# ============================================
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SESSIONS
+# ════════════════════════════════════════════════════════════════════════════════
 
 @monitoring_bp.route('/sessions', methods=['GET'])
 @jwt_required()
 def get_active_sessions():
-    """Get all active user sessions"""
-    sessions = UserSession.query.filter_by(
-        is_active=True
-    ).order_by(
-        UserSession.last_activity.desc()
-    ).all()
-    
-    return jsonify({
-        'success': True,
-        'sessions': [s.to_dict() for s in sessions],
-        'count': len(sessions)
-    })
+    sessions = (
+        UserSession.query
+        .filter_by(is_active=True)
+        .order_by(UserSession.last_activity.desc())
+        .all()
+    )
+    return jsonify({'success': True, 'sessions': [s.to_dict() for s in sessions], 'count': len(sessions)})
+
 
 @monitoring_bp.route('/sessions/<int:session_id>', methods=['DELETE'])
 @jwt_required()
 def terminate_session(session_id):
-    """Terminate a user session"""
-    session = UserSession.query.get(session_id)
-    
-    if not session:
-        return jsonify({'success': False, 'error': 'Session not found'}), 404
-    
-    session.is_active = False
-    db.session.commit()
-    
-    # Emit socket event to disconnect user
-    from src.extensions import socketio
-    socketio.emit('session_terminated', {
-        'session_id': session.session_id,
-        'user_id': session.user_id
-    }, room=f"user_{session.user_id}", namespace='/monitoring')
-    
-    return jsonify({
-        'success': True,
-        'message': 'Session terminated successfully'
-    })
+    err_id = uuid.uuid4().hex
+    try:
+        session = db.session.get(UserSession, session_id)
+        if not session:
+            return jsonify({'success': False, 'error': 'Session not found'}), 404
+
+        session.is_active = False
+        db.session.commit()
+
+        from src.extensions import socketio
+        socketio.emit('session_terminated', {
+            'session_id': session.session_id,
+            'user_id':    session.user_id,
+        }, to=f"user_{session.user_id}", namespace='/monitoring')
+
+        return jsonify({'success': True, 'message': 'Session terminated successfully'})
+
+    except Exception:
+        db.session.rollback()
+        logger.error(f"[{err_id}] terminate_session({session_id}) failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 500
+
 
 @monitoring_bp.route('/sessions/stats', methods=['GET'])
 @jwt_required()
 def get_session_stats():
-    """Get session statistics"""
-    total_active = UserSession.query.filter_by(is_active=True).count()
-    
-    # Sessions by device
-    device_stats = db.session.query(
-        UserSession.device_type,
-        db.func.count(UserSession.id)
-    ).filter_by(is_active=True).group_by(UserSession.device_type).all()
-    
-    # Sessions by browser
-    browser_stats = db.session.query(
-        UserSession.browser,
-        db.func.count(UserSession.id)
-    ).filter_by(is_active=True).group_by(UserSession.browser).all()
-    
-    # Sessions by country
-    country_stats = db.session.query(
-        UserSession.country,
-        db.func.count(UserSession.id)
-    ).filter_by(is_active=True).group_by(UserSession.country).all()
-    
+    total_active  = UserSession.query.filter_by(is_active=True).count()
+    device_stats  = db.session.query(UserSession.device_type, db.func.count(UserSession.id)).filter_by(is_active=True).group_by(UserSession.device_type).all()
+    browser_stats = db.session.query(UserSession.browser,     db.func.count(UserSession.id)).filter_by(is_active=True).group_by(UserSession.browser).all()
+    country_stats = db.session.query(UserSession.country,     db.func.count(UserSession.id)).filter_by(is_active=True).group_by(UserSession.country).all()
+
     return jsonify({
         'success': True,
         'stats': {
             'total_active': total_active,
-            'by_device': dict(device_stats),
-            'by_browser': dict(browser_stats),
-            'by_country': dict(country_stats)
-        }
+            'by_device':    dict(device_stats),
+            'by_browser':   dict(browser_stats),
+            'by_country':   dict(country_stats),
+        },
     })
 
-# ============================================
-# API REQUEST LOGS ENDPOINTS
-# ============================================
+
+# ════════════════════════════════════════════════════════════════════════════════
+# API LOGS
+# ════════════════════════════════════════════════════════════════════════════════
 
 @monitoring_bp.route('/api-logs', methods=['GET'])
 @jwt_required()
 def get_api_logs():
-    """Get recent API request logs"""
-    limit = request.args.get('limit', 100, type=int)
-    hours = request.args.get('hours', 24, type=int)
-    
-    query = ApiRequestLog.query
-    
-    if hours:
-        since = datetime.utcnow() - timedelta(hours=hours)
-        query = query.filter(ApiRequestLog.created_at >= since)
-    
-    logs = query.order_by(ApiRequestLog.created_at.desc()).limit(limit).all()
-    
-    return jsonify({
-        'success': True,
-        'logs': [l.to_dict() for l in logs],
-        'count': len(logs)
-    })
+    limit = min(request.args.get('limit', 100, type=int), 1000)
+    hours = min(request.args.get('hours',  24,  type=int), 720)
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    logs = (
+        ApiRequestLog.query
+        .filter(ApiRequestLog.created_at >= since)
+        .order_by(ApiRequestLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return jsonify({'success': True, 'logs': [log_entry.to_dict() for log_entry in logs], 'count': len(logs)})
+
 
 @monitoring_bp.route('/api-logs/summary', methods=['GET'])
 @jwt_required()
 def get_api_summary():
-    """Get API request summary"""
-    hours = request.args.get('hours', 24, type=int)
-    since = datetime.utcnow() - timedelta(hours=hours)
-    
-    total_requests = ApiRequestLog.query.filter(
-        ApiRequestLog.created_at >= since
-    ).count()
-    
-    avg_response_time = db.session.query(
-        db.func.avg(ApiRequestLog.response_time)
-    ).filter(
-        ApiRequestLog.created_at >= since
-    ).scalar() or 0
-    
-    error_count = ApiRequestLog.query.filter(
-        ApiRequestLog.created_at >= since,
-        ApiRequestLog.status_code >= 400
-    ).count()
-    
-    # Endpoint statistics
-    endpoint_stats = db.session.query(
-        ApiRequestLog.endpoint,
-        db.func.count(ApiRequestLog.id).label('count'),
-        db.func.avg(ApiRequestLog.response_time).label('avg_time')
-    ).filter(
-        ApiRequestLog.created_at >= since
-    ).group_by(
-        ApiRequestLog.endpoint
-    ).order_by(
-        db.desc('count')
-    ).limit(10).all()
-    
-    return jsonify({
-        'success': True,
-        'summary': {
-            'total_requests': total_requests,
-            'avg_response_time': round(float(avg_response_time), 2),
-            'error_rate': round((error_count / total_requests * 100) if total_requests > 0 else 0, 2),
-            'period_hours': hours,
-            'top_endpoints': [
-                {
-                    'endpoint': e[0],
-                    'count': e[1],
-                    'avg_time': round(float(e[2]), 2)
-                }
-                for e in endpoint_stats
-            ]
-        }
-    })
+    err_id = uuid.uuid4().hex
+    try:
+        hours = min(request.args.get('hours', 24, type=int), 720)
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-# ============================================
-# SYSTEM HEALTH ENDPOINTS
-# ============================================
+        total_requests    = ApiRequestLog.query.filter(ApiRequestLog.created_at >= since).count()
+        avg_response_time = db.session.query(
+            db.func.avg(ApiRequestLog.response_time)
+        ).filter(ApiRequestLog.created_at >= since).scalar() or 0
+
+        error_count = ApiRequestLog.query.filter(
+            ApiRequestLog.created_at >= since,
+            ApiRequestLog.status_code >= 400,
+        ).count()
+
+        endpoint_stats = db.session.query(
+            ApiRequestLog.endpoint,
+            db.func.count(ApiRequestLog.id).label('count'),
+            db.func.avg(ApiRequestLog.response_time).label('avg_time'),
+        ).filter(
+            ApiRequestLog.created_at >= since
+        ).group_by(ApiRequestLog.endpoint).order_by(db.desc('count')).limit(10).all()
+
+        return jsonify({
+            'success': True,
+            'summary': {
+                'total_requests':    total_requests,
+                'avg_response_time': round(float(avg_response_time), 2),
+                'error_rate':        round((error_count / total_requests * 100) if total_requests > 0 else 0, 2),
+                'period_hours':      hours,
+                'top_endpoints': [
+                    {'endpoint': e[0], 'count': e[1], 'avg_time': round(float(e[2]), 2)}
+                    for e in endpoint_stats
+                ],
+            },
+        })
+
+    except Exception:
+        logger.error(f"[{err_id}] get_api_summary failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Request failed', 'error_id': err_id}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# HEALTH
+# ════════════════════════════════════════════════════════════════════════════════
 
 @monitoring_bp.route('/health', methods=['GET'])
 def health_check():
-    """Simple health check endpoint (public)"""
+    """Public liveness probe — no system detail exposed."""
     return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.utcnow().isoformat()
+        'status':    'healthy',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
     })
+
 
 @monitoring_bp.route('/health/detailed', methods=['GET'])
 @jwt_required()
 def detailed_health():
-    """Detailed system health check"""
-    # Check database
+    """Authenticated detailed health check."""
     db_status = 'healthy'
     try:
-        db.session.execute('SELECT 1')
-    except:
+        db.session.execute(text('SELECT 1'))   # bare string SQL removed (SQLAlchemy 2.x)
+    except Exception:
         db_status = 'unhealthy'
-    
-    # Check Redis
+
     redis_status = 'healthy'
     try:
-        from src.extensions import socketio
-        # Simple Redis check
-    except:
+        import redis
+        r = redis.from_url(current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'))
+        r.ping()
+    except Exception:
         redis_status = 'unhealthy'
-    
-    # Get latest metrics
+
     metrics = MetricsCollector.get_latest_metrics()
-    
+
     return jsonify({
         'success': True,
         'health': {
-            'database': db_status,
-            'redis': redis_status,
+            'database':  db_status,
+            'redis':     redis_status,
             'websocket': 'healthy',
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat(),
         },
-        'metrics': metrics
+        'metrics': metrics,
     })
 
-# ============================================
-# INITIALIZATION ENDPOINT
-# ============================================
+
+# ════════════════════════════════════════════════════════════════════════════════
+# INIT — admin only
+# ════════════════════════════════════════════════════════════════════════════════
 
 @monitoring_bp.route('/init', methods=['POST'])
 @jwt_required()
 def init_monitoring():
-    """Initialize monitoring system with default data"""
+    """
+    Seed default alert rules and dashboard config.
+    Restricted to admin users — the original had this check commented out,
+    allowing any authenticated user to reinitialise monitoring.
+    """
+    err_id  = uuid.uuid4().hex
     user_id = int(get_jwt_identity())
-    
-    # Check if user is admin (optional)
-    # user = User.query.get(user_id)
-    # if not user.is_admin:
-    #     return jsonify({'success': False, 'error': 'Admin access required'}), 403
-    
+
+    if not _is_admin(user_id):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+
     try:
-        # Create default alert rules
         default_rules = [
-            {
-                'name': 'High CPU Usage',
-                'description': 'CPU usage exceeds 80% for 5 minutes',
-                'metric_type': 'cpu',
-                'metric_name': 'cpu_usage',
-                'alert_condition': 'gt',
-                'threshold_value': 80,
-                'severity': 'warning',
-                'duration_seconds': 300,
-                'notify_email': True
-            },
-            {
-                'name': 'Critical CPU Usage',
-                'description': 'CPU usage exceeds 95% for 2 minutes',
-                'metric_type': 'cpu',
-                'metric_name': 'cpu_usage',
-                'alert_condition': 'gt',
-                'threshold_value': 95,
-                'severity': 'critical',
-                'duration_seconds': 120,
-                'notify_email': True,
-                'notify_slack': True
-            },
-            {
-                'name': 'High Memory Usage',
-                'description': 'Memory usage exceeds 85% for 5 minutes',
-                'metric_type': 'memory',
-                'metric_name': 'usage',
-                'alert_condition': 'gt',
-                'threshold_value': 85,
-                'severity': 'warning',
-                'duration_seconds': 300,
-                'notify_email': True
-            },
-            {
-                'name': 'Low Disk Space',
-                'description': 'Disk usage exceeds 90%',
-                'metric_type': 'disk',
-                'metric_name': 'usage',
-                'alert_condition': 'gt',
-                'threshold_value': 90,
-                'severity': 'critical',
-                'duration_seconds': 600,
-                'notify_email': True,
-                'notify_slack': True
-            },
-            {
-                'name': 'High API Response Time',
-                'description': 'Average response time exceeds 500ms for 5 minutes',
-                'metric_type': 'app',
-                'metric_name': 'avg_response_time',
-                'alert_condition': 'gt',
-                'threshold_value': 500,
-                'severity': 'warning',
-                'duration_seconds': 300,
-                'notify_email': True
-            },
-            {
-                'name': 'High Error Rate',
-                'description': 'Error rate exceeds 5% for 5 minutes',
-                'metric_type': 'app',
-                'metric_name': 'error_rate',
-                'alert_condition': 'gt',
-                'threshold_value': 5,
-                'severity': 'critical',
-                'duration_seconds': 300,
-                'notify_email': True,
-                'notify_slack': True
-            }
+            {'name': 'High CPU Usage',         'metric_type': 'cpu',    'metric_name': 'cpu_usage',         'condition': 'gt', 'threshold': 80,  'severity': 'warning',  'duration': 300, 'notify_email': True},
+            {'name': 'Critical CPU Usage',     'metric_type': 'cpu',    'metric_name': 'cpu_usage',         'condition': 'gt', 'threshold': 95,  'severity': 'critical', 'duration': 120, 'notify_email': True, 'notify_slack': True},
+            {'name': 'High Memory Usage',      'metric_type': 'memory', 'metric_name': 'usage',             'condition': 'gt', 'threshold': 85,  'severity': 'warning',  'duration': 300, 'notify_email': True},
+            {'name': 'Low Disk Space',         'metric_type': 'disk',   'metric_name': 'usage',             'condition': 'gt', 'threshold': 90,  'severity': 'critical', 'duration': 600, 'notify_email': True, 'notify_slack': True},
+            {'name': 'High API Response Time', 'metric_type': 'app',    'metric_name': 'avg_response_time', 'condition': 'gt', 'threshold': 500, 'severity': 'warning',  'duration': 300, 'notify_email': True},
+            {'name': 'High Error Rate',        'metric_type': 'app',    'metric_name': 'error_rate',        'condition': 'gt', 'threshold': 5,   'severity': 'critical', 'duration': 300, 'notify_email': True, 'notify_slack': True},
         ]
-        
-        for rule_data in default_rules:
-            existing = AlertRule.query.filter_by(name=rule_data['name']).first()
-            if not existing:
-                rule = AlertRule(
-                    **rule_data,
-                    created_by=user_id,
-                    cooldown_seconds=300
-                )
-                db.session.add(rule)
-        
-        # Create default dashboard config for admin
-        admin_config = DashboardConfig.query.filter_by(user_id=user_id).first()
-        if not admin_config:
-            config = DashboardConfig(
+
+        for rd in default_rules:
+            if not AlertRule.query.filter_by(name=rd['name']).first():
+                db.session.add(AlertRule(
+                    name=rd['name'], metric_type=rd['metric_type'],
+                    metric_name=rd['metric_name'], alert_condition=rd['condition'],
+                    threshold_value=rd['threshold'], severity=rd['severity'],
+                    duration_seconds=rd.get('duration', 0), cooldown_seconds=300,
+                    notify_email=rd.get('notify_email', False),
+                    notify_slack=rd.get('notify_slack', False),
+                    enabled=True, created_by=user_id,
+                ))
+
+        if not DashboardConfig.query.filter_by(user_id=user_id).first():
+            db.session.add(DashboardConfig(
                 user_id=user_id,
-                layout={"grid": [[0, 0, 6, 4], [6, 0, 6, 4], [0, 4, 12, 4]]},
-                widgets=["cpu", "memory", "disk", "network", "users", "files", "alerts", "api"],
-                time_range="last_1h",
-                refresh_interval=30,
-                theme="light",
-                default_dashboard=True
-            )
-            db.session.add(config)
-        
+                layout={'grid': [[0, 0, 6, 4], [6, 0, 6, 4], [0, 4, 12, 4]]},
+                widgets=['cpu', 'memory', 'disk', 'network', 'users', 'files', 'alerts', 'api'],
+                time_range='last_1h', refresh_interval=30, theme='light', default_dashboard=True,
+            ))
+
         db.session.commit()
-        
-        # Start monitoring if not already running
-        from src.monitoring.metrics import MetricsCollector
-        from src.monitoring.alerts import AlertManager
-        
         MetricsCollector.start_collection()
         AlertManager.start_monitoring()
-        
-        return jsonify({
-            'success': True,
-            'message': 'Monitoring system initialized successfully'
-        })
-        
-    except Exception as e:
+
+        return jsonify({'success': True, 'message': 'Monitoring system initialised successfully'})
+
+    except Exception:
         db.session.rollback()
-        logger.error(f"Error initializing monitoring: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"[{err_id}] init_monitoring failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Initialisation failed', 'error_id': err_id}), 500

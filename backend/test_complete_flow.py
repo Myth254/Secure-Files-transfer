@@ -17,7 +17,7 @@ def print_response(name, response):
     try:
         print("Response:")
         print(json.dumps(response.json(), indent=2))
-    except:
+    except Exception:
         print(f"Response: {response.text[:200]}...")
     return response
 
@@ -50,7 +50,6 @@ def test_complete_flow():
         return
     
     reg_data = response.json()
-    user_id = reg_data.get("user_id")
     private_key = reg_data.get("rsa_private_key")
     
     # Save private key
@@ -115,7 +114,7 @@ def test_complete_flow():
             response = requests.get(f"{BASE_URL}/api/files/{file_id}", headers=headers)
             if response.status_code == 200:
                 file_data = response.json().get("file", {})
-                print(f"✅ File downloaded successfully!")
+                print("✅ File downloaded successfully!")
                 print(f"   Filename: {file_data.get('filename')}")
                 print(f"   Original size: {file_data.get('original_size')} bytes")
                 print(f"   Encrypted file length: {len(file_data.get('encrypted_file', '')) // 2} bytes (hex)")

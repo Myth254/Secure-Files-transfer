@@ -4,16 +4,13 @@ Client-Side Perspective Test
 Simulates exactly what a React frontend would do
 """
 import requests
-import json
 import os
 import sys
-import tempfile
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidTag
-import base64
 
 BASE_URL = "http://localhost:5000"
 USERNAME = "clienttest"
@@ -165,7 +162,7 @@ def test_complete_flow():
         if token:
             # Client saves JWT token (like React would)
             storage.set_item("jwt_token", token)
-            print(f"✅ Login successful!")
+            print("✅ Login successful!")
             print(f"🔑 JWT Token received: {token[:50]}...")
         else:
             print("❌ No token in response")
@@ -194,7 +191,7 @@ Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.""".encode('ut
     # Save original file locally (client-side)
     with open("original_document.txt", "wb") as f:
         f.write(test_content)
-    print(f"📄 Created test file: original_document.txt")
+    print("📄 Created test file: original_document.txt")
     print(f"   Size: {len(test_content)} bytes")
     print(f"   Content preview: {test_content[:100].decode('utf-8')}...")
     
@@ -218,7 +215,7 @@ Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.""".encode('ut
         result = response.json()
         file_id = result.get("file", {}).get("id")
         storage.set_item("uploaded_file_id", file_id)
-        print(f"✅ File uploaded successfully!")
+        print("✅ File uploaded successfully!")
         print(f"   File ID: {file_id}")
         print(f"   Original size: {result.get('file', {}).get('original_size')} bytes")
         print(f"   Encrypted size: {result.get('file', {}).get('encrypted_size')} bytes")
@@ -300,7 +297,7 @@ Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.""".encode('ut
         # Save decrypted file
         with open("decrypted_document.txt", "wb") as f:
             f.write(decrypted_data)
-        print(f"💾 Decrypted file saved to: decrypted_document.txt")
+        print("💾 Decrypted file saved to: decrypted_document.txt")
         
         # Verify the decrypted content matches original
         with open("original_document.txt", "rb") as f:

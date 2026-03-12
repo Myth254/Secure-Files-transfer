@@ -6,7 +6,7 @@ import os
 import socket
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from src.extensions import db
 from src.models.monitoring import SystemMetric, UserSession, ApiRequestLog
 import logging
@@ -19,7 +19,7 @@ class MetricsCollector:
     _collection_thread = None
     _is_collecting = False
     _interval = 30
-    _app = None  # Store app reference for context
+    _app = None
     
     @classmethod
     def init_app(cls, app):
@@ -64,25 +64,17 @@ class MetricsCollector:
         """Collect all metrics within app context"""
         try:
             hostname = socket.gethostname()
-            environment = 'production'  # Default fallback
+            environment = 'production'
             
-            # Try to get environment from app config if available
             try:
                 from flask import current_app
                 environment = current_app.config.get('FLASK_ENV', 'development')
-            except:
+            except Exception:
                 pass
             
-            # Collect system metrics
             cls._collect_system_metrics(hostname, environment)
-            
-            # Collect application metrics
             cls._collect_app_metrics(hostname, environment)
-            
-            # Emit real-time updates
             cls._emit_metrics_update()
-            
-            # Cleanup old metrics
             cls._cleanup_old_metrics()
             
         except Exception as e:
@@ -97,17 +89,16 @@ class MetricsCollector:
             cpu_count = psutil.cpu_count()
             cpu_freq = psutil.cpu_freq()
             
-            cls._save_metric('cpu', 'cpu_usage', cpu_percent, '%', 
+            cls._save_metric('cpu', 'cpu_usage', cpu_percent, '%',
                            {'cores': cpu_count}, hostname, environment)
             
             if cpu_freq:
                 cls._save_metric('cpu', 'cpu_frequency', cpu_freq.current, 'MHz',
                                {}, hostname, environment)
             
-            # Per-core CPU usage
             per_cpu = psutil.cpu_percent(interval=1, percpu=True)
             for i, usage in enumerate(per_cpu):
-                cls._save_metric('cpu', f'core_{i}', usage, '%', 
+                cls._save_metric('cpu', f'core_{i}', usage, '%',
                                {'core': i}, hostname, environment)
             
             # Memory metrics
@@ -121,7 +112,6 @@ class MetricsCollector:
             cls._save_metric('memory', 'total', memory.total / (1024**3), 'GB',
                            {}, hostname, environment)
             
-            # Swap memory
             swap = psutil.swap_memory()
             cls._save_metric('memory', 'swap_used', swap.used / (1024**3), 'GB',
                            {}, hostname, environment)
@@ -139,7 +129,6 @@ class MetricsCollector:
             cls._save_metric('disk', 'total', disk.total / (1024**3), 'GB',
                            {'mount': '/'}, hostname, environment)
             
-            # Disk I/O
             disk_io = psutil.disk_io_counters()
             if disk_io:
                 cls._save_metric('disk', 'read_mb', disk_io.read_bytes / (1024**2), 'MB',
@@ -158,10 +147,13 @@ class MetricsCollector:
             cls._save_metric('network', 'packets_recv', net.packets_recv, 'packets',
                            {}, hostname, environment)
             
-            # Network connections
-            connections = len(psutil.net_connections())
-            cls._save_metric('network', 'connections', connections, 'count',
-                           {}, hostname, environment)
+            # net_connections() requires elevated privileges on some OSes; guard it
+            try:
+                connections = len(psutil.net_connections())
+                cls._save_metric('network', 'connections', connections, 'count',
+                               {}, hostname, environment)
+            except Exception as e:
+                logger.warning(f"Could not collect network connections (may require root): {e}")
             
             # Process metrics
             process = psutil.Process()
@@ -186,9 +178,9 @@ class MetricsCollector:
                 cls._save_metric('system', 'load_15min', load_avg[2], 'load',
                                {}, hostname, environment)
             
-            # Uptime
+            # Uptime — use timezone-aware datetimes consistently
             boot_time = datetime.fromtimestamp(psutil.boot_time())
-            uptime = (datetime.now() - boot_time).total_seconds()
+            uptime = (datetime.now(timezone.utc).replace(tzinfo=None) - boot_time).total_seconds()
             cls._save_metric('system', 'uptime', uptime / 3600, 'hours',
                            {}, hostname, environment)
             
@@ -201,14 +193,14 @@ class MetricsCollector:
         try:
             from src.models.user import User
             from src.models.file import File
-            from src.models.share import ShareRequest, SharedAccess
+            from src.models.share import ShareRequest
             from src.models.otp import OTPCode
             
             # User metrics
             total_users = User.query.count()
             active_sessions = UserSession.query.filter_by(is_active=True).count()
             new_users_24h = User.query.filter(
-                User.created_at >= datetime.utcnow() - timedelta(hours=24)
+                User.created_at >= datetime.now(timezone.utc) - timedelta(hours=24)
             ).count()
             
             cls._save_metric('app', 'total_users', total_users, 'count',
@@ -222,7 +214,7 @@ class MetricsCollector:
             total_files = File.query.count()
             total_storage = db.session.query(db.func.sum(File.original_size)).scalar() or 0
             files_24h = File.query.filter(
-                File.upload_date >= datetime.utcnow() - timedelta(hours=24)
+                File.upload_date >= datetime.now(timezone.utc) - timedelta(hours=24)
             ).count()
             
             cls._save_metric('app', 'total_files', total_files, 'count',
@@ -243,10 +235,10 @@ class MetricsCollector:
             
             # OTP metrics
             active_otps = OTPCode.query.filter_by(is_used=False).filter(
-                OTPCode.expires_at > datetime.utcnow()
+                OTPCode.expires_at > datetime.now(timezone.utc)
             ).count()
             otps_24h = OTPCode.query.filter(
-                OTPCode.created_at >= datetime.utcnow() - timedelta(hours=24)
+                OTPCode.created_at >= datetime.now(timezone.utc) - timedelta(hours=24)
             ).count()
             
             cls._save_metric('app', 'active_otps', active_otps, 'count',
@@ -256,19 +248,19 @@ class MetricsCollector:
             
             # API metrics
             api_requests_1h = ApiRequestLog.query.filter(
-                ApiRequestLog.created_at >= datetime.utcnow() - timedelta(hours=1)
+                ApiRequestLog.created_at >= datetime.now(timezone.utc) - timedelta(hours=1)
             ).count()
             
             avg_response_time = db.session.query(
                 db.func.avg(ApiRequestLog.response_time)
             ).filter(
-                ApiRequestLog.created_at >= datetime.utcnow() - timedelta(hours=1)
+                ApiRequestLog.created_at >= datetime.now(timezone.utc) - timedelta(hours=1)
             ).scalar() or 0
             
             error_rate = db.session.query(
                 db.func.count(ApiRequestLog.id)
             ).filter(
-                ApiRequestLog.created_at >= datetime.utcnow() - timedelta(hours=1),
+                ApiRequestLog.created_at >= datetime.now(timezone.utc) - timedelta(hours=1),
                 ApiRequestLog.status_code >= 400
             ).scalar() or 0
             
@@ -307,23 +299,18 @@ class MetricsCollector:
     def _emit_metrics_update(cls):
         """Emit real-time metrics update via WebSocket"""
         try:
-            # Import socketio locally to avoid import issues
             from src.extensions import socketio
             
-            # Check if socketio is properly initialized
             if socketio is None:
                 logger.debug("SocketIO not available - skipping metrics emit")
                 return
             
-            # Check if socketio has the emit method
             if not hasattr(socketio, 'emit'):
                 logger.debug("SocketIO missing emit method - skipping metrics emit")
                 return
             
-            # Get latest metrics
             metrics = cls.get_latest_metrics()
             
-            # Only emit if there are metrics
             if metrics:
                 socketio.emit('metrics_update', metrics, namespace='/monitoring')
                 logger.debug("Metrics update emitted successfully")
@@ -343,7 +330,7 @@ class MetricsCollector:
         try:
             from flask import current_app
             retention_days = current_app.config.get('METRICS_RETENTION_DAYS', 30)
-            cutoff = datetime.utcnow() - timedelta(days=retention_days)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
             
             deleted = SystemMetric.query.filter(
                 SystemMetric.timestamp < cutoff
@@ -375,7 +362,7 @@ class MetricsCollector:
     @classmethod
     def get_metrics_history(cls, metric_type, metric_name, hours=24):
         """Get historical metrics for charts"""
-        since = datetime.utcnow() - timedelta(hours=hours)
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
         
         metrics = SystemMetric.query.filter_by(
             metric_type=metric_type,
@@ -390,29 +377,43 @@ class MetricsCollector:
     
     @classmethod
     def get_aggregated_metrics(cls, metric_type, metric_name, interval='1h', hours=24):
-        """Get aggregated metrics (avg, min, max) over time intervals"""
+        """Get aggregated metrics (avg, min, max) over time intervals.
+
+        NOTE: The GROUP BY expression uses func.date_format() which is specific
+        to MySQL/MariaDB.  On SQLite (used in development/tests) this function
+        is not available.  A fallback to raw (non-aggregated) history is
+        provided so the application does not crash on SQLite.
+        """
         from sqlalchemy import func
         
-        since = datetime.utcnow() - timedelta(hours=hours)
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
         
-        # Group by time interval
-        results = db.session.query(
-            func.date_format(SystemMetric.timestamp, '%Y-%m-%d %H:00:00').label('time_interval'),
-            func.avg(SystemMetric.metric_value).label('avg_value'),
-            func.min(SystemMetric.metric_value).label('min_value'),
-            func.max(SystemMetric.metric_value).label('max_value')
-        ).filter(
-            SystemMetric.metric_type == metric_type,
-            SystemMetric.metric_name == metric_name,
-            SystemMetric.timestamp >= since
-        ).group_by('time_interval').order_by('time_interval').all()
-        
-        return [
-            {
-                'interval': r.time_interval,
-                'avg': float(r.avg_value) if r.avg_value else 0,
-                'min': float(r.min_value) if r.min_value else 0,
-                'max': float(r.max_value) if r.max_value else 0
-            }
-            for r in results
-        ]
+        try:
+            # MySQL/MariaDB path — requires date_format() support
+            results = db.session.query(
+                func.date_format(SystemMetric.timestamp, '%Y-%m-%d %H:00:00').label('time_interval'),
+                func.avg(SystemMetric.metric_value).label('avg_value'),
+                func.min(SystemMetric.metric_value).label('min_value'),
+                func.max(SystemMetric.metric_value).label('max_value')
+            ).filter(
+                SystemMetric.metric_type == metric_type,
+                SystemMetric.metric_name == metric_name,
+                SystemMetric.timestamp >= since
+            ).group_by('time_interval').order_by('time_interval').all()
+            
+            return [
+                {
+                    'interval': r.time_interval,
+                    'avg': float(r.avg_value) if r.avg_value else 0,
+                    'min': float(r.min_value) if r.min_value else 0,
+                    'max': float(r.max_value) if r.max_value else 0
+                }
+                for r in results
+            ]
+        except Exception as e:
+            # Fallback for databases that do not support date_format() (e.g. SQLite)
+            logger.warning(
+                f"get_aggregated_metrics: date_format() unavailable, returning raw history. "
+                f"Error: {e}"
+            )
+            return cls.get_metrics_history(metric_type, metric_name, hours)

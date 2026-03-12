@@ -2,7 +2,6 @@
 Tests for authentication endpoints
 """
 import json
-import pytest
 from src.models.user import User
 from src.models.log import Log
 

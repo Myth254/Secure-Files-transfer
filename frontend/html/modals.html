@@ -1,0 +1,315 @@
+<!-- ═══════════════════════════════════════════════════
+     MODALS
+     All modal overlays in one file.
+     Loaded by: js/loader.js → #modalsMount
+     Managed by: js/ui.js (openModal / closeModal)
+════════════════════════════════════════════════════ -->
+
+<!-- ══════════════════════════════
+     MODAL: UPLOAD FILE
+══════════════════════════════ -->
+<div id="uploadModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 class="card-title">Upload Encrypted File</h3>
+        <p class="card-subtitle">
+          File will be encrypted with your RSA public key
+        </p>
+      </div>
+      <button class="btn btn-ghost"
+        onclick="closeModal('uploadModal')">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <!-- Drop zone -->
+      <div class="upload-zone" id="uploadZone"
+        ondragover="event.preventDefault(); this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleFileDrop(event)">
+        <input type="file" id="fileInput"
+          accept=".pdf,.txt,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+          onchange="handleFileSelect(event)">
+        <div class="upload-icon">📄</div>
+        <div class="upload-title">Drop file here or click to browse</div>
+        <div class="upload-sub">Max size: 10 MB · Stored encrypted at rest</div>
+        <div class="upload-types">
+          <span class="type-chip">PDF</span>
+          <span class="type-chip">TXT</span>
+          <span class="type-chip">JPG</span>
+          <span class="type-chip">PNG</span>
+          <span class="type-chip">DOC</span>
+          <span class="type-chip">DOCX</span>
+          <span class="type-chip">XLS</span>
+          <span class="type-chip">XLSX</span>
+          <span class="type-chip">PPT</span>
+          <span class="type-chip">PPTX</span>
+        </div>
+      </div>
+
+      <!-- Selected file preview (shown after selection) -->
+      <div id="selectedFileInfo" class="hidden">
+        <div class="file-item">
+          <div class="file-icon file-icon-default" id="uploadFileIcon">📄</div>
+          <div class="file-info">
+            <div class="file-name" id="uploadFileName">—</div>
+            <div class="file-meta">
+              <span id="uploadFileSize">—</span>
+              <span class="sep">·</span>
+              <span id="uploadFileType">—</span>
+            </div>
+          </div>
+          <button class="btn btn-ghost btn-sm"
+            onclick="clearFileSelection()">✕</button>
+        </div>
+      </div>
+
+      <!-- Upload progress bar -->
+      <div id="uploadProgress" class="hidden">
+        <div class="flex justify-between text-xs text-muted mb-2">
+          <span>Encrypting &amp; uploading…</span>
+          <span id="uploadProgressPct">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="uploadProgressBar"
+            style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary"
+        onclick="closeModal('uploadModal')">Cancel</button>
+      <button class="btn btn-primary" id="uploadBtn"
+        onclick="handleUpload()" disabled>
+        ⬆ Upload &amp; Encrypt
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════
+     MODAL: DECRYPT & DOWNLOAD
+══════════════════════════════ -->
+<div id="downloadModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 class="card-title">Decrypt &amp; Download</h3>
+        <p class="card-subtitle">Enter your password to decrypt the file</p>
+      </div>
+      <button class="btn btn-ghost"
+        onclick="closeModal('downloadModal')">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="alert alert-info">
+        <span class="alert-icon">ℹ</span>
+        <div class="alert-content">
+          Decryption happens locally in your browser.
+          Your private key never leaves your device.
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">File</label>
+        <div class="form-input"
+          style="cursor:default; color:var(--text-secondary)"
+          id="downloadFileName">—</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">
+          Your Password <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">🔒</span>
+          <input type="password" id="downloadPassword" class="form-input"
+            placeholder="Enter your account password">
+          <span class="input-suffix"
+            onclick="togglePasswordVisibility('downloadPassword', this)">👁</span>
+        </div>
+        <div class="form-hint">Required to decrypt your RSA private key</div>
+      </div>
+
+      <div id="downloadAlert" class="alert alert-error hidden"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary"
+        onclick="closeModal('downloadModal')">Cancel</button>
+      <button class="btn btn-success" id="downloadBtn"
+        onclick="handleDownload()">
+        🔓 Decrypt &amp; Download
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════
+     MODAL: DELETE CONFIRMATION
+══════════════════════════════ -->
+<div id="deleteModal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <h3 class="card-title">Delete File</h3>
+      <button class="btn btn-ghost"
+        onclick="closeModal('deleteModal')">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="alert alert-error">
+        <span class="alert-icon">⚠</span>
+        <div class="alert-content">
+          <div class="alert-title">This action is irreversible</div>
+          <div>
+            The encrypted file will be permanently deleted
+            and cannot be recovered.
+          </div>
+        </div>
+      </div>
+      <p class="text-sm text-secondary">
+        You are about to delete:
+        <strong class="text-primary" id="deleteFileName">—</strong>
+      </p>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary"
+        onclick="closeModal('deleteModal')">Cancel</button>
+      <button class="btn btn-danger"
+        onclick="confirmDelete()">🗑 Delete Permanently</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════
+     MODAL: SHARE FILE
+══════════════════════════════ -->
+<div id="shareModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3 class="card-title">Share File</h3>
+        <p class="card-subtitle">Send a share request to another user</p>
+      </div>
+      <button class="btn btn-ghost"
+        onclick="closeModal('shareModal')">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">
+          Select File <span class="required">*</span>
+        </label>
+        <select class="form-input" id="shareFileSelect">
+          <option value="">Choose a file…</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">
+          Recipient Username <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">👤</span>
+          <input type="text" id="shareRecipient" class="form-input"
+            placeholder="Enter username">
+        </div>
+      </div>
+
+      <!-- Permission toggles -->
+      <div class="form-group">
+        <label class="form-label">Permissions</label>
+        <div style="background:var(--bg-elevated); border:1px solid var(--border-subtle); border-radius:var(--radius-lg); padding:.75rem 1rem">
+
+          <div class="perm-row">
+            <div>
+              <div class="perm-label">View file</div>
+              <div class="perm-desc">Can see the file (always on)</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="permView" checked disabled>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="perm-row">
+            <div>
+              <div class="perm-label">Download file</div>
+              <div class="perm-desc">Can download and decrypt</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="permDownload">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="perm-row">
+            <div>
+              <div class="perm-label">Reshare file</div>
+              <div class="perm-desc">Can share with others</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="permReshare">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Expiry (days)</label>
+        <input type="number" id="shareExpiry" class="form-input"
+          placeholder="Leave blank for no expiry" min="1" max="365">
+        <div class="form-hint">1–365 days. Empty = permanent access.</div>
+      </div>
+
+      <div id="shareModalAlert" class="alert alert-error hidden"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary"
+        onclick="closeModal('shareModal')">Cancel</button>
+      <button class="btn btn-primary"
+        onclick="handleShareRequest()">📤 Send Request</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════
+     MODAL: PUBLIC KEY VIEWER
+══════════════════════════════ -->
+<div id="pubKeyModal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <div>
+        <h3 class="card-title">Your RSA Public Key</h3>
+        <p class="card-subtitle">
+          Used to encrypt files uploaded to your account
+        </p>
+      </div>
+      <button class="btn btn-ghost"
+        onclick="closeModal('pubKeyModal')">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="key-display" id="publicKeyDisplay"
+        style="max-height:200px"></div>
+      <div class="flex gap-2 mt-3">
+        <button class="btn btn-secondary btn-sm"
+          onclick="copyToClipboard(
+            document.getElementById('publicKeyDisplay').textContent,
+            'Public key copied'
+          )">
+          📋 Copy
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

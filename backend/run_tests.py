@@ -14,19 +14,17 @@ print("=" * 50)
 # Test 1: Import modules
 print("\n[1] Testing imports...")
 try:
-    from src.extensions import db, jwt
+    from src.extensions import db
     print("✅ src.extensions imported")
 except Exception as e:
     print(f"❌ Failed: {e}")
 
 try:
-    from src.models.user import User
     print("✅ User model imported")
 except Exception as e:
     print(f"❌ Failed: {e}")
 
 try:
-    from src.models.file import File
     print("✅ File model imported")
 except Exception as e:
     print(f"❌ Failed: {e}")

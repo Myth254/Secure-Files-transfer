@@ -4,7 +4,7 @@ Monitoring Models for Real-time System Monitoring
 from src.extensions import db
 from datetime import datetime
 from sqlalchemy.dialects.mysql import JSON
-from sqlalchemy import Index, text
+from sqlalchemy import Index
 
 class SystemMetric(db.Model):
     """System performance metrics"""

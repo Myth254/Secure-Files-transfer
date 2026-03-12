@@ -1,0 +1,156 @@
+<!-- ═══════════════════════════════════════════════════
+     PAGE: MONITORING
+     Loaded by: js/loader.js → #pagMonitoring
+════════════════════════════════════════════════════ -->
+<div id="pagMonitoring" class="hidden">
+
+  <div class="page-header">
+    <div class="page-header-left">
+      <h2>System Monitoring</h2>
+      <p>Real-time performance metrics and alerts</p>
+    </div>
+    <div class="flex gap-2 items-center">
+      <div class="badge badge-green">
+        <span class="dot dot-green"></span>
+        Live
+      </div>
+      <button class="btn btn-secondary btn-sm"
+        onclick="refreshMetrics()">↻ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Four metric cards -->
+  <div class="metric-grid mb-4">
+
+    <div class="metric-card">
+      <div class="metric-label">CPU Usage</div>
+      <div class="metric-value" id="metCPU">—<span class="unit">%</span></div>
+      <div class="metric-bar-wrap">
+        <div class="metric-bar-fill" id="metCPUBar" style="width:0%"></div>
+      </div>
+      <div class="metric-status" id="metCPUStatus"></div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-label">Memory Usage</div>
+      <div class="metric-value" id="metMem">—<span class="unit">%</span></div>
+      <div class="metric-bar-wrap">
+        <div class="metric-bar-fill" id="metMemBar" style="width:0%"></div>
+      </div>
+      <div class="metric-status" id="metMemStatus"></div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-label">Disk Usage</div>
+      <div class="metric-value" id="metDisk">—<span class="unit">%</span></div>
+      <div class="metric-bar-wrap">
+        <div class="metric-bar-fill" id="metDiskBar" style="width:0%"></div>
+      </div>
+      <div class="metric-status" id="metDiskStatus"></div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-label">Avg Response Time</div>
+      <div class="metric-value" id="metResponseTime">—<span class="unit">ms</span></div>
+      <div class="metric-bar-wrap">
+        <div class="metric-bar-fill" id="metResponseBar" style="width:0%"></div>
+      </div>
+      <div class="metric-status" id="metResponseStatus"></div>
+    </div>
+
+  </div>
+
+  <!-- Active alerts + API stats side by side -->
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem">
+
+    <!-- Active alerts -->
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Active Alerts</div>
+          <div class="card-subtitle" id="activeAlertsCount">Loading…</div>
+        </div>
+        <span class="badge badge-red" id="criticalBadge"
+          style="display:none"></span>
+      </div>
+      <div class="card-body" id="activeAlertsContainer">
+        <div class="table-empty" style="padding:1.5rem">
+          <div class="table-empty-icon" style="font-size:1.75rem">✅</div>
+          <div class="table-empty-text">All clear — no active alerts</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- API activity panel -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">API Activity</div>
+      </div>
+      <div class="card-body">
+        <div class="flex flex-col gap-3">
+          <div class="flex justify-between items-center"
+            style="padding:.5rem 0; border-bottom:1px solid var(--border-subtle)">
+            <span class="text-sm text-secondary">Total Requests (24h)</span>
+            <span class="font-mono text-sm" id="apiTotal">—</span>
+          </div>
+          <div class="flex justify-between items-center"
+            style="padding:.5rem 0; border-bottom:1px solid var(--border-subtle)">
+            <span class="text-sm text-secondary">Error Rate</span>
+            <span class="font-mono text-sm" id="apiErrorRate">—</span>
+          </div>
+          <div class="flex justify-between items-center"
+            style="padding:.5rem 0; border-bottom:1px solid var(--border-subtle)">
+            <span class="text-sm text-secondary">Active Sessions</span>
+            <span class="font-mono text-sm" id="activeSessions">—</span>
+          </div>
+          <div class="flex justify-between items-center"
+            style="padding:.5rem 0; border-bottom:1px solid var(--border-subtle)">
+            <span class="text-sm text-secondary">Uptime</span>
+            <span class="font-mono text-sm badge badge-green"
+              id="uptimeDisplay">—</span>
+          </div>
+          <div class="flex justify-between items-center"
+            style="padding:.5rem 0">
+            <span class="text-sm text-secondary">Failed Logins (1h)</span>
+            <span class="font-mono text-sm" id="failedLogins">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Alert rules table -->
+  <div class="card mt-4">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Alert Rules</div>
+        <div class="card-subtitle">Configured monitoring thresholds</div>
+      </div>
+    </div>
+    <div class="card-body" style="padding:0">
+      <div class="table-wrap" style="border:none; border-radius:0">
+        <table>
+          <thead>
+            <tr>
+              <th>Rule Name</th>
+              <th>Metric</th>
+              <th>Condition</th>
+              <th>Threshold</th>
+              <th>Severity</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="alertRulesBody">
+            <tr>
+              <td colspan="6" class="table-empty">
+                <div class="table-empty-text">Loading alert rules…</div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
