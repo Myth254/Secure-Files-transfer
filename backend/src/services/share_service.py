@@ -4,6 +4,7 @@ Share Service for File Sharing Between Users
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
+from sqlalchemy import func
 from src.extensions import db
 from src.models.user import User
 from src.models.file import File
@@ -67,7 +68,7 @@ class ShareService:
                 raise ValidationError("You don't own this file")
             
             # Get recipient
-            recipient = User.query.filter_by(username=recipient_username).first()
+            recipient = db.session.query(User).filter_by(username=recipient_username).first()
             if not recipient:
                 raise ValidationError("Recipient not found")
             
@@ -75,7 +76,7 @@ class ShareService:
                 raise ValidationError("Cannot share file with yourself")
             
             # Check for existing active share
-            existing = ShareRequest.query.filter_by(
+            existing = db.session.query(ShareRequest).filter_by(
                 file_id=file_id,
                 recipient_id=recipient.id,
                 status='accepted'
@@ -104,6 +105,7 @@ class ShareService:
                 share_request.expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
             
             db.session.add(share_request)
+            db.session.flush()  # Flush to assign ID before using it
             
             # Log the request
             log = ShareLog(
@@ -260,7 +262,7 @@ class ShareService:
             share_request.status = 'revoked'
             
             # Also revoke any access records
-            access_records = SharedAccess.query.filter_by(
+            access_records = db.session.query(SharedAccess).filter_by(
                 share_request_id=request_id
             ).all()
             
@@ -299,31 +301,48 @@ class ShareService:
             Dict[str, Any]: Shared files and permissions
         """
         try:
-            # Get active shared access records
-            access_records = SharedAccess.query.filter_by(
-                recipient_id=user_id
-            ).filter(
-                SharedAccess.revoked_at.is_(None)
-            ).all()
+            access_records = (
+                db.session.query(SharedAccess)
+                .join(ShareRequest, ShareRequest.id == SharedAccess.share_request_id)
+                .join(File, File.id == SharedAccess.file_id)
+                .filter(
+                    SharedAccess.recipient_id == user_id,
+                    SharedAccess.revoked_at.is_(None),
+                    ShareRequest.status == 'accepted',
+                )
+                .order_by(SharedAccess.granted_at.desc())
+                .all()
+            )
             
             shared_files = []
             for access in access_records:
-                file = db.session.get(File, access.file_id)
-                if file:
-                    shared_files.append({
-                        'file_id': file.id,
-                        'filename': file.filename,
-                        'original_size': file.original_size,
-                        'owner_id': file.owner_id,
-                        'permissions': {
-                            'can_view': access.can_view,
-                            'can_download': access.can_download,
-                            'can_reshare': access.can_reshare
-                        },
-                        'access_granted': access.granted_at.isoformat(),
-                        'view_count': access.view_count,
-                        'download_count': access.download_count
-                    })
+                file = access.file
+                share_request = access.share_request
+                owner = share_request.owner if share_request else db.session.get(User, file.owner_id) if file else None
+                if not file:
+                    continue
+
+                shared_files.append({
+                    'access_id': access.id,
+                    'share_request_id': access.share_request_id,
+                    'file_id': file.id,
+                    'filename': file.filename,
+                    'extension': file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else '',
+                    'original_size': file.original_size,
+                    'owner_id': file.owner_id,
+                    'owner_username': owner.username if owner else None,
+                    'permissions': {
+                        'can_view': access.can_view,
+                        'can_download': access.can_download,
+                        'can_reshare': access.can_reshare
+                    },
+                    'access_granted': access.granted_at.isoformat(),
+                    'upload_date': file.upload_date.isoformat() if file.upload_date else None,
+                    'updated_at': file.updated_at.isoformat() if file.updated_at else None,
+                    'storage_model': 'shared_reference',
+                    'view_count': access.view_count,
+                    'download_count': access.download_count
+                })
             
             return {
                 'success': True,
@@ -350,13 +369,13 @@ class ShareService:
         try:
             if role == 'recipient':
                 # Requests sent to user
-                query = ShareRequest.query.filter_by(
+                query = db.session.query(ShareRequest).filter_by(
                     recipient_id=user_id,
                     status='pending'
                 )
             else:
                 # Requests sent by user
-                query = ShareRequest.query.filter_by(
+                query = db.session.query(ShareRequest).filter_by(
                     owner_id=user_id
                 )
             
@@ -367,13 +386,18 @@ class ShareService:
                 file = db.session.get(File, req.file_id)
                 if file:
                     request_list.append({
+                        'id': req.id,
                         'request_id': req.id,
                         'file_id': file.id,
                         'filename': file.filename,
                         'owner_id': req.owner_id,
+                        'owner_username': req.owner.username if req.owner else None,
                         'recipient_id': req.recipient_id,
+                        'recipient_username': req.recipient.username if req.recipient else None,
                         'status': req.status,
                         'requested_at': req.requested_at.isoformat(),
+                        'responded_at': req.responded_at.isoformat() if req.responded_at else None,
+                        'expires_at': req.expires_at.isoformat() if req.expires_at else None,
                         'permissions': {
                             'can_view': req.can_view,
                             'can_download': req.can_download,
@@ -391,3 +415,70 @@ class ShareService:
         except Exception as e:
             logger.error(f"Failed to get share requests for user {user_id}: {e}")
             raise ShareError("Failed to get share requests")
+
+    @staticmethod
+    def get_share_stats(user_id: int) -> Dict[str, Any]:
+        """
+        Return a consistent breakdown of inbound/outbound sharing state.
+        """
+        try:
+            outbound_rows = (
+                db.session.query(ShareRequest.status, func.count(ShareRequest.id))
+                .filter(ShareRequest.owner_id == user_id)
+                .group_by(ShareRequest.status)
+                .all()
+            )
+            inbound_rows = (
+                db.session.query(ShareRequest.status, func.count(ShareRequest.id))
+                .filter(ShareRequest.recipient_id == user_id)
+                .group_by(ShareRequest.status)
+                .all()
+            )
+
+            outbound = {status: count for status, count in outbound_rows}
+            inbound = {status: count for status, count in inbound_rows}
+            accessible_files = (
+                db.session.query(SharedAccess)
+                .filter(
+                    SharedAccess.recipient_id == user_id,
+                    SharedAccess.revoked_at.is_(None),
+                )
+                .count()
+            )
+
+            sent_total = sum(outbound.values())
+            inbound_total = sum(inbound.values())
+            closed_total = (
+                outbound.get('rejected', 0) + outbound.get('revoked', 0) +
+                inbound.get('rejected', 0) + inbound.get('revoked', 0)
+            )
+
+            return {
+                'success': True,
+                'stats': {
+                    'outbound': {
+                        'total': sent_total,
+                        'pending': outbound.get('pending', 0),
+                        'accepted': outbound.get('accepted', 0),
+                        'rejected': outbound.get('rejected', 0),
+                        'revoked': outbound.get('revoked', 0),
+                    },
+                    'inbound': {
+                        'total': inbound_total,
+                        'pending': inbound.get('pending', 0),
+                        'accepted': inbound.get('accepted', 0),
+                        'rejected': inbound.get('rejected', 0),
+                        'revoked': inbound.get('revoked', 0),
+                    },
+                    'summary': {
+                        'shares_sent': sent_total,
+                        'pending_requests': inbound.get('pending', 0),
+                        'accepted_shares': inbound.get('accepted', 0),
+                        'accessible_files': accessible_files,
+                        'closed_shares': closed_total,
+                    },
+                },
+            }
+        except Exception as e:
+            logger.error(f"Failed to get share stats for user {user_id}: {e}")
+            raise ShareError("Failed to get share stats")

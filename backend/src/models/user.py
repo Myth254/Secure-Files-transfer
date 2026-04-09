@@ -22,7 +22,7 @@ class User(db.Model):
 
     # Relationships
     files = db.relationship('File', backref='owner', lazy=True, cascade='all, delete-orphan')
-    logs  = db.relationship('Log',  backref='user',  lazy=True)
+    logs  = db.relationship('Log',  backref='user',  lazy=True, passive_deletes=True)
 
     def to_dict(self):
         return {

@@ -17,8 +17,10 @@ Changes from original
   memory (performance fix).
 """
 import logging
+import mimetypes
 from typing import Dict, Any, Optional, Tuple
 
+from flask import current_app, has_app_context
 from werkzeug.utils import secure_filename
 
 from src.extensions import db
@@ -39,6 +41,7 @@ _ALLOWED_MIME_TYPES: Dict[str, str] = {
     'png':  'image/png',
     'doc':  'application/msword',
     'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'odt':  'application/vnd.oasis.opendocument.text',
     'xls':  'application/vnd.ms-excel',
     'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'ppt':  'application/vnd.ms-powerpoint',
@@ -71,6 +74,16 @@ class FileService:
 
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
     ALLOWED_EXTENSIONS = set(_ALLOWED_MIME_TYPES.keys())
+
+    @staticmethod
+    def _max_file_size() -> int:
+        if not has_app_context():
+            return FileService.MAX_FILE_SIZE
+
+        try:
+            return int(current_app.config.get('MAX_CONTENT_LENGTH', FileService.MAX_FILE_SIZE))
+        except (TypeError, ValueError):
+            return FileService.MAX_FILE_SIZE
 
     # ── Validation ────────────────────────────────────────────────────────
 
@@ -105,15 +118,12 @@ class FileService:
             detected_mime = _detect_mime(file_obj)
             if detected_mime:
                 expected_mime = _ALLOWED_MIME_TYPES.get(file_ext, '')
-                # Some types (e.g. text/plain) may differ slightly; allow
-                # a broad check: either exact match or the top-level type.
-                if expected_mime and detected_mime not in (
-                    expected_mime,
-                    expected_mime.split('/')[0] + '/' + expected_mime.split('/')[0],
-                ):
-                    # Strict: reject if mime doesn't match expected
-                    allowed_mimes = set(_ALLOWED_MIME_TYPES.values())
-                    if detected_mime not in allowed_mimes:
+                if expected_mime and detected_mime != expected_mime:
+                    # Some magic libraries append charset metadata for plain text.
+                    if not (
+                        expected_mime == 'text/plain'
+                        and detected_mime.startswith('text/plain')
+                    ):
                         return False, (
                             f"File content type '{detected_mime}' does not match "
                             f"the declared extension '.{file_ext}'"
@@ -126,8 +136,9 @@ class FileService:
 
             if file_size == 0:
                 return False, "File is empty"
-            if file_size > FileService.MAX_FILE_SIZE:
-                max_mb = FileService.MAX_FILE_SIZE // (1024 * 1024)
+            max_file_size = FileService._max_file_size()
+            if file_size > max_file_size:
+                max_mb = max_file_size // (1024 * 1024)
                 return False, f"File too large. Maximum size is {max_mb} MB"
 
             return True, ""
@@ -176,7 +187,7 @@ class FileService:
             file_hash = EncryptionService.generate_file_hash(file_data)
 
             # Check for duplicates (informational log only; still stored)
-            existing = File.query.filter_by(
+            existing = db.session.query(File).filter_by(
                 owner_id=user_id, file_hash=file_hash
             ).first()
             if existing:
@@ -224,7 +235,7 @@ class FileService:
         for that.
         """
         try:
-            query = File.query.filter_by(owner_id=user_id)
+            query = db.session.query(File).filter_by(owner_id=user_id)
 
             if search:
                 query = query.filter(File.filename.ilike(f"%{search}%"))
@@ -263,40 +274,134 @@ class FileService:
 
     @staticmethod
     def get_file_for_download(user_id: int, file_id: int) -> Dict[str, Any]:
+        return FileService.get_file_for_access(user_id, file_id, required_permission='download')
+
+    @staticmethod
+    def get_file_for_access(
+        user_id: int,
+        file_id: int,
+        required_permission: str = 'download',
+    ) -> Dict[str, Any]:
         """
-        Return the encrypted file blobs for client-side decryption.
+        Return encrypted file blobs for client-side view/download.
+
+        First checks direct ownership; if not found, checks SharedAccess
+        so recipients can access the file using their own re-wrapped AES key.
 
         encrypted_aes_key is hex-encoded in the response so it can be
         safely embedded in JSON.
 
         Raises:
-            ValidationError: if file not found or user is not the owner.
+            ValidationError: if file not found or user has no access.
         """
         try:
-            file_record = File.query.filter_by(
+            if required_permission not in ('view', 'download'):
+                raise ValidationError("required_permission must be view or download")
+
+            mime_type = mimetypes.guess_type(f"file-{file_id}")[0]
+
+            # ── Owner path ────────────────────────────────────────────────
+            file_record = db.session.query(File).filter_by(
                 id=file_id, owner_id=user_id
             ).first()
 
+            if file_record:
+                ext = file_record.filename.rsplit('.', 1)[-1].lower() if '.' in file_record.filename else ''
+                return {
+                    'id':                file_record.id,
+                    'filename':          file_record.filename,
+                    'original_size':     file_record.original_size,
+                    'upload_date':       file_record.upload_date.isoformat(),
+                    'updated_at':        file_record.updated_at.isoformat() if file_record.updated_at else None,
+                    'extension':         ext,
+                    'mime_type':         mimetypes.guess_type(file_record.filename)[0] or mime_type or 'application/octet-stream',
+                    'owner_id':          file_record.owner_id,
+                    'owner_username':    None,
+                    'access_mode':       'owner',
+                    'permissions': {
+                        'can_view': True,
+                        'can_download': True,
+                        'can_delete': True,
+                    },
+                    # Both payloads hex-encoded for JSON transport
+                    'encrypted_file':    file_record.encrypted_file.hex(),
+                    'encrypted_aes_key': file_record.encrypted_aes_key.hex()
+                        if isinstance(file_record.encrypted_aes_key, bytes)
+                        else file_record.encrypted_aes_key,
+                }
+
+            # ── Share-recipient path (M-08) ───────────────────────────────
+            from src.models.share import SharedAccess
+            from datetime import datetime, timezone
+
+            access = db.session.query(SharedAccess).filter_by(
+                file_id=file_id,
+                recipient_id=user_id,
+            ).filter(
+                SharedAccess.revoked_at.is_(None)
+            ).first()
+
+            if not access:
+                raise ValidationError("File not found or unauthorised")
+
+            if required_permission == 'download' and not access.can_download:
+                raise ValidationError("Download permission not granted")
+            if required_permission == 'view' and not access.can_view:
+                raise ValidationError("View permission not granted")
+
+            # Load the file record (now confirmed accessible)
+            file_record = db.session.get(File, file_id)
             if not file_record:
                 raise ValidationError("File not found or unauthorised")
+
+            # Recipient's encrypted AES key is stored on the SharedAccess row
+            # (re-wrapped with the recipient's public key at share-acceptance time)
+            recipient_aes_key = access.share_request.encrypted_aes_key \
+                if access.share_request else None
+
+            if recipient_aes_key is None:
+                raise ValidationError("No decryption key available for this share")
+
+            # Track access metrics
+            if required_permission == 'download':
+                access.download_count = (access.download_count or 0) + 1
+            else:
+                access.view_count = (access.view_count or 0) + 1
+            access.last_accessed  = datetime.now(timezone.utc)
+            db.session.flush()
+
+            ext = file_record.filename.rsplit('.', 1)[-1].lower() if '.' in file_record.filename else ''
+            owner = db.session.get(User, file_record.owner_id)
 
             return {
                 'id':                file_record.id,
                 'filename':          file_record.filename,
                 'original_size':     file_record.original_size,
                 'upload_date':       file_record.upload_date.isoformat(),
-                # Both payloads hex-encoded for JSON transport
+                'updated_at':        file_record.updated_at.isoformat() if file_record.updated_at else None,
+                'extension':         ext,
+                'mime_type':         mimetypes.guess_type(file_record.filename)[0] or 'application/octet-stream',
+                'owner_id':          file_record.owner_id,
+                'owner_username':    owner.username if owner else None,
+                'access_mode':       'shared_reference',
+                'share_request_id':  access.share_request_id,
+                'permissions': {
+                    'can_view': access.can_view,
+                    'can_download': access.can_download,
+                    'can_delete': False,
+                },
                 'encrypted_file':    file_record.encrypted_file.hex(),
-                'encrypted_aes_key': file_record.encrypted_aes_key.hex()
-                    if isinstance(file_record.encrypted_aes_key, bytes)
-                    else file_record.encrypted_aes_key,
+                'encrypted_aes_key': recipient_aes_key.hex()
+                    if isinstance(recipient_aes_key, bytes)
+                    else recipient_aes_key,
+                'shared': True,
             }
 
         except ValidationError:
             raise
         except Exception as e:
-            logger.error(f"get_file_for_download({file_id}) failed: {e}")
-            raise FileError("Failed to prepare file for download")
+            logger.error(f"get_file_for_access({file_id}, {required_permission}) failed: {e}")
+            raise FileError("Failed to prepare file for access")
 
     # ── Deletion ──────────────────────────────────────────────────────────
 
@@ -312,7 +417,7 @@ class FileService:
             ValidationError: file not found or not owned by user.
         """
         try:
-            file_record = File.query.filter_by(
+            file_record = db.session.query(File).filter_by(
                 id=file_id, owner_id=user_id
             ).first()
 
@@ -366,7 +471,7 @@ class FileService:
                 'total_original_bytes':   total_original,
                 'total_original_mb':      round(total_original / (1024 * 1024), 2),
                 'file_types':             file_types,
-                'storage_limit_mb':       FileService.MAX_FILE_SIZE // (1024 * 1024),
+                'storage_limit_mb':       FileService._max_file_size() // (1024 * 1024),
             }
 
         except Exception as e:

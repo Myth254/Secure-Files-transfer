@@ -137,7 +137,7 @@ def get_user_activity():
         limit   = max(1, min(limit, 100))
 
         logs = (
-            Log.query
+            db.session.query(Log)
             .filter_by(user_id=user_id)
             .order_by(Log.timestamp.desc())
             .limit(limit)
@@ -180,3 +180,97 @@ def check_email(email):
     except Exception as exc:
         logger.error(f"check_email error: {exc}")
         return jsonify({'success': False, 'error': 'Failed to check email'}), 500
+
+
+@user_bp.route('/public-key/<username>', methods=['GET'])
+@jwt_required()
+def get_user_public_key(username):
+    """
+    Return a user's RSA-2048 public key PEM.
+    
+    Used by file sharers to perform client-side key re-wrapping:
+    they fetch the recipient's public key and re-encrypt the file's 
+    AES key with it before requesting the share (F-05).
+    
+    Returns:
+        200: Public key PEM (safe to expose)
+        404: User not found or has no public key
+    """
+    err_id = uuid.uuid4().hex
+    try:
+        user = db.session.query(User).filter_by(username=username.strip(), is_active=True).first()
+        
+        if not user:
+            return jsonify({
+                'success': False,
+                'error': 'User not found'
+            }), 404
+        
+        if not user.rsa_public_key:
+            return jsonify({
+                'success': False,
+                'error': 'User has no RSA public key. Ask them to log out and log back in to generate one.'
+            }), 404
+        
+        return jsonify({
+            'success':    True,
+            'username':   user.username,
+            'public_key': user.rsa_public_key,  # PEM-formatted string
+        }), 200
+    
+    except Exception:
+        logger.error(f"[{err_id}] get_user_public_key failed", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to retrieve public key',
+            'error_id': err_id
+        }), 500
+
+
+@user_bp.route('/me/private-key', methods=['GET'])
+@jwt_required()
+def get_my_private_key():
+    """
+    Return the current user's AES-GCM-encrypted RSA private key.
+    
+    The server NEVER returns the plaintext private key. Only the
+    password-protected envelope is returned. The client decrypts it
+    locally using the user's password and Argon2id KDF to derive
+    the AES key.
+    
+    Format: salt_hex:iv_hex:ciphertext_hex:tag_hex
+    (matches EncryptionService.encrypt_private_key() output)
+    
+    Returns:
+        200: Encrypted private key envelope
+        404: Private key not found
+    """
+    err_id = uuid.uuid4().hex
+    try:
+        user_id = int(get_jwt_identity())
+        user = db.session.get(User, user_id)
+        
+        if not user:
+            return jsonify({
+                'success': False,
+                'error': 'User not found'
+            }), 404
+        
+        if not user.rsa_private_key_encrypted:
+            return jsonify({
+                'success': False,
+                'error': 'Private key not found. Please contact support.'
+            }), 404
+        
+        return jsonify({
+            'success':                 True,
+            'encrypted_private_key':   user.rsa_private_key_encrypted,  # salt:iv:ct:tag
+        }), 200
+    
+    except Exception:
+        logger.error(f"[{err_id}] get_my_private_key failed", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to retrieve private key',
+            'error_id': err_id
+        }), 500

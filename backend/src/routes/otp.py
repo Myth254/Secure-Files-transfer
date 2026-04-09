@@ -123,7 +123,10 @@ def verify_otp():
                 # Short-lived HMAC-signed token for file operations (F-02)
                 'download_token':   result.get('download_token'),
             }), 200
-        return jsonify({'success': False, 'error': 'OTP verification failed'}), 400
+        return jsonify({
+            'success': False,
+            'error': result.get('error', 'OTP verification failed'),
+        }), 400
 
     except Exception:
         logger.error(f"[{err_id}] verify_otp failed", exc_info=True)

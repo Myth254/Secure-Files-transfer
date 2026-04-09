@@ -20,12 +20,15 @@ datetime.utcnow() → datetime.now(timezone.utc)
 """
 import uuid
 import logging
+from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_cors import cross_origin
 
-from src.extensions import db
+from src.extensions import db, socketio
 from src.models.log import Log
+from src.models.file import File
 from src.services.file_service import FileService
 from src.utils.exceptions import ValidationError, FileError
 
@@ -68,6 +71,13 @@ def upload_file():
         db.session.commit()
 
         logger.info(f"File uploaded: {file_record.filename} by user {user_id}")
+        socketio.emit('file_uploaded', {
+            'user_id':   user_id,
+            'filename':  file_record.filename,
+            'file_id':   file_record.id,
+            'size':      file_record.original_size,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }, namespace='/monitoring')
 
         return jsonify({
             'success': True,
@@ -86,7 +96,7 @@ def upload_file():
 
 # ── list ──────────────────────────────────────────────────────────────────────
 
-@files_bp.route('', methods=['GET'])
+@files_bp.route('', methods=['GET'], strict_slashes=False)
 @jwt_required()
 def get_files():
     """Return paginated file metadata — no encrypted payloads."""
@@ -136,18 +146,118 @@ def download_file(file_id):
                 'file_id':     file_id,
             }), 403
 
-        file_data = FileService.get_file_for_download(user_id, file_id)
+        file_data = FileService.get_file_for_access(user_id, file_id, required_permission='download')
         _log(user_id, 'download', f'Downloaded file id={file_id}')
         db.session.commit()
 
         logger.info(f"File downloaded: id={file_id} by user {user_id}")
+        socketio.emit('file_downloaded', {
+            'user_id':   user_id,
+            'file_id':   file_id,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }, namespace='/monitoring')
         return jsonify({'success': True, 'file': file_data}), 200
 
     except (ValidationError, FileError) as known:
+        _log(user_id, 'download_failed', f'Failed download file id={file_id}: {known}')  # type: ignore[name-defined]
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         return jsonify({'success': False, 'error': str(known)}), 404
     except Exception:
         logger.error(f"[{err_id}] download_file({file_id}) failed", exc_info=True)
         return jsonify({'success': False, 'error': 'Download failed', 'error_id': err_id}), 500
+
+
+@files_bp.route('/<int:file_id>/content', methods=['GET'])
+@jwt_required()
+def get_file_content(file_id):
+    """
+    Return encrypted blobs for client-side preview or download.
+    The API never returns plaintext.
+    """
+    err_id = uuid.uuid4().hex
+    try:
+        from src.utils.security import SecurityUtils
+
+        user_id        = int(get_jwt_identity())
+        intent         = request.args.get('intent', 'view')
+        download_token = request.headers.get('X-Download-Token', '')
+
+        if intent not in ('view', 'download'):
+            return jsonify({'success': False, 'error': 'intent must be view or download'}), 400
+
+        if not SecurityUtils.verify_otp_download_token(download_token, user_id, file_id):
+            return jsonify({
+                'success':     False,
+                'error':       'A valid OTP download token is required',
+                'require_otp': True,
+                'purpose':     'file_download',
+                'file_id':     file_id,
+            }), 403
+
+        file_data = FileService.get_file_for_access(user_id, file_id, required_permission=intent)
+        _log(user_id, intent, f'{intent.title()}ed file id={file_id}')
+        db.session.commit()
+
+        return jsonify({'success': True, 'intent': intent, 'file': file_data}), 200
+
+    except (ValidationError, FileError) as known:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(known)}), 404
+    except Exception:
+        db.session.rollback()
+        logger.error(f"[{err_id}] get_file_content({file_id}) failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Failed to retrieve file content', 'error_id': err_id}), 500
+
+
+# ── get file key (for client-side re-wrapping) ─────────────────────────────────
+
+@files_bp.route('/<int:file_id>/key', methods=['GET'])
+@cross_origin()
+@jwt_required()
+def get_file_key(file_id):
+    """
+    Return only the owner's encrypted AES key for client-side re-wrapping.
+    
+    Does NOT require an OTP download token — JWT ownership check is sufficient
+    because no file content is exposed, only the RSA-wrapped key envelope.
+    The encrypted_aes_key alone is useless without the owner's private key
+    (which never leaves the browser).
+    
+    Used by the share flow to obtain the AES key that will be
+    unwrapped with the owner's private key, then re-wrapped for the recipient.
+    """
+    err_id = uuid.uuid4().hex
+    try:
+        user_id = int(get_jwt_identity())
+        
+        # The caller must own the file
+        file_record = db.session.query(File).filter_by(
+            id=file_id,
+            owner_id=user_id
+        ).first()
+        
+        if not file_record:
+            return jsonify({'success': False, 'error': 'File not found'}), 404
+        
+        # Return the encrypted AES key (already in hex from model or convert bytes)
+        encrypted_aes_key_hex = (
+            file_record.encrypted_aes_key.hex()
+            if isinstance(file_record.encrypted_aes_key, bytes)
+            else file_record.encrypted_aes_key
+        )
+        
+        return jsonify({
+            'success': True,
+            'file_id': file_id,
+            'encrypted_aes_key': encrypted_aes_key_hex,
+        }), 200
+    
+    except Exception:
+        logger.error(f"[{err_id}] get_file_key({file_id}) failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Failed to retrieve file key', 'error_id': err_id}), 500
 
 
 # ── delete ────────────────────────────────────────────────────────────────────
@@ -177,6 +287,12 @@ def delete_file(file_id):
         db.session.commit()
 
         logger.info(f"File deleted: {filename} by user {user_id}")
+        socketio.emit('file_deleted', {
+            'user_id':   user_id,
+            'filename':  filename,
+            'file_id':   file_id,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }, namespace='/monitoring')
         return jsonify({'success': True, 'message': f'File "{filename}" deleted successfully'}), 200
 
     except (ValidationError, FileError) as known:

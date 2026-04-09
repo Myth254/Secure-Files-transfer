@@ -1,6 +1,17 @@
 import os
 import sys
+from pathlib import Path
 from datetime import timedelta
+
+from dotenv import load_dotenv
+
+
+_CONFIG_DIR = Path(__file__).resolve().parent
+
+# Load local development environment files before any required config is read.
+# Existing exported environment variables still win over .env values.
+load_dotenv(_CONFIG_DIR / '.env')
+load_dotenv(_CONFIG_DIR.parent / '.env')
 
 
 def _require_env(name: str, min_length: int = 32) -> str:
@@ -35,6 +46,19 @@ def _require_admin_password() -> str:
             "FATAL: ADMIN_PASSWORD must be at least 12 characters."
         )
     return value
+
+
+def _get_admin_password() -> str:
+    """
+    Require ADMIN_PASSWORD only in production-like environments.
+
+    This keeps imports lightweight for tests and local tooling while still
+    failing fast when production starts without an explicit admin credential.
+    """
+    flask_env = os.environ.get('FLASK_ENV', 'development').lower()
+    if flask_env == 'production':
+        return _require_admin_password()
+    return os.environ.get('ADMIN_PASSWORD', '')
 
 
 class Config:
@@ -119,7 +143,7 @@ class Config:
     ALLOWED_EXTENSIONS = set(
         os.environ.get(
             'ALLOWED_EXTENSIONS',
-            'pdf,txt,jpg,jpeg,png,doc,docx,xls,xlsx,ppt,pptx'
+            'pdf,txt,jpg,jpeg,png,doc,docx,odt,xls,xlsx,ppt,pptx'
         ).split(',')
     )
     MAX_FILES_PER_USER = int(os.environ.get('MAX_FILES_PER_USER', 1000))
@@ -130,9 +154,15 @@ class Config:
     PASSWORD_MAX_LENGTH = int(os.environ.get('PASSWORD_MAX_LENGTH', 100))
 
     # ── CORS ──────────────────────────────────────────────────────────────
-    CORS_ORIGINS  = os.environ.get('CORS_ORIGINS',  'http://localhost:3000,http://localhost:5173').split(',')
+    CORS_ORIGINS  = os.environ.get('CORS_ORIGINS',  'http://localhost:3000,http://localhost:5173,http://localhost:5500,http://127.0.0.1:5500').split(',')
     CORS_METHODS  = os.environ.get('CORS_METHODS',  'GET,POST,PUT,DELETE,OPTIONS').split(',')
-    CORS_HEADERS  = os.environ.get('CORS_HEADERS',  'Content-Type,Authorization').split(',')
+    CORS_HEADERS  = [
+        header.strip()
+        for header in os.environ.get('CORS_HEADERS', 'Content-Type,Authorization').split(',')
+        if header.strip()
+    ]
+    if all(header.lower() != 'x-download-token' for header in CORS_HEADERS):
+        CORS_HEADERS.append('X-Download-Token')
 
     # ── Encryption ────────────────────────────────────────────────────────
     RSA_KEY_SIZE  = int(os.environ.get('RSA_KEY_SIZE',  2048))
@@ -142,6 +172,7 @@ class Config:
     # KDF: minimum 100,000 rounds for PBKDF2; used by encrypt_private_key()
     KDF_ROUNDS    = int(os.environ.get('KDF_ROUNDS',    100_000))
     KDF_SALT_SIZE = int(os.environ.get('KDF_SALT_SIZE', 32))    # 256-bit salt
+    FILE_HASH_SECRET = os.environ.get('FILE_HASH_SECRET', SECRET_KEY)
 
     # ── Rate Limiting ─────────────────────────────────────────────────────
     RATE_LIMIT_DEFAULT  = os.environ.get('RATE_LIMIT_DEFAULT',  '100/hour')
@@ -221,7 +252,7 @@ class Config:
     # ADMIN_PASSWORD has NO default; startup aborts if unset.
     ADMIN_EMAIL    = os.environ.get('ADMIN_EMAIL',    'admin@securetransfer.com')
     ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
-    ADMIN_PASSWORD = _require_admin_password()
+    ADMIN_PASSWORD = _get_admin_password()
 
     # ── Misc ──────────────────────────────────────────────────────────────
     BASE_URL = os.environ.get('BASE_URL', 'http://localhost:5000')
@@ -258,7 +289,20 @@ class DevelopmentConfig(Config):
     ALERT_CHECK_INTERVAL        = 20
 
     BASE_URL     = 'http://localhost:5000'
-    CORS_ORIGINS = ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5000']
+    CORS_ORIGINS = [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:5000',
+        'http://localhost:5500',
+        'http://127.0.0.1:5500',
+    ]
+    SOCKETIO_CORS_ALLOWED_ORIGINS = [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:5000',
+        'http://localhost:5500',
+        'http://127.0.0.1:5500',
+    ]
 
 
 class TestingConfig(Config):
@@ -267,6 +311,7 @@ class TestingConfig(Config):
     DEBUG   = True
 
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    SQLALCHEMY_ENGINE_OPTIONS = {}
 
     RATE_LIMIT_DEFAULT  = None
     RATE_LIMIT_LOGIN    = None
@@ -319,11 +364,6 @@ class ProductionConfig(Config):
     API_LOG_RETENTION_DAYS = 90
     SESSION_RETENTION_DAYS = 30
 
-    RATE_LIMIT_LOGIN    = '5/minute'
-    RATE_LIMIT_OTP      = '3/minute'
-    RATE_LIMIT_UPLOAD   = '50/hour'
-    RATE_LIMIT_REGISTER = '3/hour'
-
 
 class StagingConfig(ProductionConfig):
     """Staging — mirrors production with slightly relaxed rate limits for QA."""
@@ -345,3 +385,10 @@ config = {
     'production':  ProductionConfig,
     'default':     DevelopmentConfig,
 }
+
+
+def get_config():
+    """Return the active config class based on FLASK_CONFIG / FLASK_ENV."""
+    config_name = os.environ.get('FLASK_CONFIG') or os.environ.get('FLASK_ENV', 'development')
+    config_name = config_name.lower()
+    return config.get(config_name, Config)

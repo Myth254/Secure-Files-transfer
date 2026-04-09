@@ -41,8 +41,10 @@ async function loadStats() {
     const { ok, data } = await api('GET', '/files/stats');
     if (ok && data.success) {
       document.getElementById('statTotalFiles').textContent    = data.stats.total_files;
-      document.getElementById('statStorageUsed').textContent   = data.stats.total_storage_mb + ' MB';
-      document.getElementById('statRecentUploads').textContent = data.stats.recent_uploads_7d;
+      document.getElementById('statStorageUsed').textContent   = (data.stats.total_original_mb ?? data.stats.total_storage_mb ?? '—') + ' MB';
+      document.getElementById('statRecentUploads').textContent = data.stats.file_types
+        ? Object.values(data.stats.file_types).reduce((a, b) => a + b, 0)
+        : '—';  // backend has no recent_uploads_7d — show total by type or '—'
     }
   } catch { /* non-critical */ }
 }
@@ -95,21 +97,22 @@ function renderFiles(files) {
             <div class="file-meta">
               <span>${formatBytes(f.original_size)}</span>
               <span class="sep">·</span>
-              <span>Encrypted: ${formatBytes(f.encrypted_size)}</span>
-              <span class="sep">·</span>
               <span>${formatDate(f.upload_date)}</span>
             </div>
           </div>
           <div class="file-actions">
             <button class="btn btn-secondary btn-sm"
-              onclick="openShareFromFile(${f.id}, '${escHtml(f.filename)}')"
-              title="Share">🔗</button>
+              onclick='openViewModal(${f.id}, ${JSON.stringify(f.filename)})'
+              title="Preview in browser">View</button>
             <button class="btn btn-success btn-sm"
-              onclick="openDownloadModal(${f.id}, '${escHtml(f.filename)}')"
-              title="Download">⬇</button>
+              onclick='openDownloadModal(${f.id}, ${JSON.stringify(f.filename)})'
+              title="Decrypt and download">Download</button>
+            <button class="btn btn-secondary btn-sm"
+              onclick='openShareFromFile(${f.id}, ${JSON.stringify(f.filename)})'
+              title="Share secure access">Share</button>
             <button class="btn btn-danger btn-sm"
-              onclick="openDeleteModal(${f.id}, '${escHtml(f.filename)}')"
-              title="Delete">🗑</button>
+              onclick='openDeleteModal(${f.id}, ${JSON.stringify(f.filename)})'
+              title="Delete">Delete</button>
           </div>
         </div>
       `).join('')}
@@ -258,64 +261,240 @@ async function handleUpload() {
 ════════════════════════════════════════ */
 
 /**
- * Open the decrypt-and-download modal for a file.
+ * Open the secure file action modal for preview/download.
  * @param {number} fileId
  * @param {string} filename
+ * @param {'owned'|'shared'} source
+ * @param {'view'|'download'} action
  */
-function openDownloadModal(fileId, filename) {
+function openFileActionModal(fileId, filename, source = 'owned', action = 'download') {
   state.downloadTarget = fileId;
+  state.downloadTargetSource = source;
+  state.downloadOTP = null;
+  state.fileActionMode = action;
+  const actionVerb = action === 'view' ? 'Preview' : 'Download';
+  const actionResult = action === 'view' ? 'Open preview' : 'Save file';
+  document.getElementById('downloadModalTitle').textContent =
+    source === 'shared' ? `${actionVerb} Shared File` : `${actionVerb} File`;
+  document.getElementById('downloadModalSubtitle').textContent =
+    `Step 1: Enter password -> Step 2: Request OTP -> Step 3: Enter code -> ${actionResult}`;
   document.getElementById('downloadFileName').textContent = filename;
   document.getElementById('downloadPassword').value       = '';
+  document.getElementById('downloadOtpCode').value        = '';
+  document.getElementById('downloadOtpGroup').classList.add('hidden');
+  document.getElementById('downloadOtpHint').textContent  =
+    source === 'shared'
+      ? `Shared file ${action === 'view' ? 'preview' : 'download'} requires a one-time code sent to your email.`
+      : 'Enter the code we sent to your email to continue.';
+  document.getElementById('downloadStepText').textContent =
+    source === 'shared'
+      ? `Shared file ${action === 'view' ? 'preview' : 'download'} requires email verification before decryption.`
+      : `We will email a one-time code before the ${action === 'view' ? 'preview' : 'download'} starts.`;
+  document.getElementById('downloadStepIndicator').classList.remove('hidden');
   document.getElementById('downloadAlert').classList.add('hidden');
+  setDownloadButtonLabel(getActionButtonLabel(action, 'request'));
   openModal('downloadModal');
 }
 
+function openDownloadModal(fileId, filename, source = 'owned') {
+  openFileActionModal(fileId, filename, source, 'download');
+}
+
+function openViewModal(fileId, filename, source = 'owned') {
+  openFileActionModal(fileId, filename, source, 'view');
+}
+
+function closeDownloadModal() {
+  state.downloadTarget = null;
+  state.downloadTargetSource = 'owned';
+  state.downloadOTP = null;
+  state.fileActionMode = 'download';
+  document.getElementById('downloadPassword').value = '';
+  document.getElementById('downloadOtpCode').value = '';
+  document.getElementById('downloadOtpGroup').classList.add('hidden');
+  document.getElementById('downloadAlert').classList.add('hidden');
+  document.getElementById('downloadStepIndicator').classList.add('hidden');
+  setDownloadButtonLabel(getActionButtonLabel('download', 'request'));
+  closeModal('downloadModal');
+}
+
+function setDownloadButtonLabel(label) {
+  const btn = document.getElementById('downloadBtn');
+  if (!btn) return;
+  btn.innerHTML = label;
+  btn.dataset.origText = label;
+}
+
+function getActionButtonLabel(action, phase) {
+  if (phase === 'verify') {
+    return action === 'view' ? 'Verify OTP & Preview' : 'Verify OTP & Download';
+  }
+  return 'Request OTP';
+}
+
+function getProtectedFilePath(fileId, source, action) {
+  const intent = encodeURIComponent(action);
+  if (source === 'shared') {
+    return `/share/shared-files/${fileId}/content?intent=${intent}`;
+  }
+  return `/files/${fileId}/content?intent=${intent}`;
+}
+
+async function decryptProtectedFile(filePayload, password) {
+  const privKeyResp = await api('GET', '/user/me/private-key');
+  if (!privKeyResp.ok) {
+    throw new Error('Failed to retrieve private key for decryption');
+  }
+
+  const privKeyPem = await window.crypto_module.decryptPrivateKeyPem(
+    privKeyResp.data.encrypted_private_key,
+    password
+  );
+
+  return window.crypto_module.decryptFile(
+    filePayload.encrypted_file,
+    filePayload.encrypted_aes_key,
+    privKeyPem
+  );
+}
+
 /**
- * Request the encrypted file from the server.
- * In production, the decryption step uses the Web Crypto API
- * with the user's RSA private key (unlocked via their password).
+ * Handle secure preview/download via OTP + client-side decryption.
  */
 async function handleDownload() {
   const password = document.getElementById('downloadPassword').value;
+  const otpCode  = document.getElementById('downloadOtpCode').value.trim();
   const alertEl  = document.getElementById('downloadAlert');
+  const fileId   = state.downloadTarget;
+  const source   = state.downloadTargetSource || 'owned';
+  const action   = state.fileActionMode || 'download';
 
   if (!password) {
-    alertEl.className = 'alert alert-error';
+    alertEl.className   = 'alert alert-error';
     alertEl.textContent = 'Password is required for decryption';
     alertEl.classList.remove('hidden');
     return;
   }
 
-  setLoading('downloadBtn', true, 'Decrypting...');
+  setLoading('downloadBtn', true, 'Requesting OTP...');
   alertEl.classList.add('hidden');
 
   try {
-    const { ok, data } = await api('GET', `/files/${state.downloadTarget}`);
+    if (!state.downloadOTP) {
+      // Step 1: Request a file_download OTP
+      const otpReq = await api('POST', '/otp/send', {
+        purpose: 'file_download',
+        file_id: fileId,
+      });
+
+      if (!otpReq.ok || !otpReq.data.success) {
+        throw new Error(otpReq.data.error || 'Failed to send OTP');
+      }
+
+      state.downloadOTP = {
+        otp_id: otpReq.data.otp_id,
+        expires_in: otpReq.data.expires_in,
+        message: otpReq.data.message,
+      };
+
+      document.getElementById('downloadOtpGroup').classList.remove('hidden');
+      document.getElementById('downloadStepText').textContent =
+        otpReq.data.message || 'A one-time code has been sent to your email.';
+      document.getElementById('downloadOtpHint').textContent =
+        otpReq.data.expires_in
+          ? `Enter the 6-digit code from your email. It expires in ${Math.ceil(otpReq.data.expires_in / 60)} minute(s).`
+          : 'Enter the 6-digit code we sent to your email.';
+      setDownloadButtonLabel(getActionButtonLabel(action, 'verify'));
+      document.getElementById('downloadOtpCode').focus();
+      setLoading('downloadBtn', false);
+      setDownloadButtonLabel(getActionButtonLabel(action, 'verify'));
+      return;
+    }
+
+    if (!otpCode) {
+      throw new Error('Enter the 6-digit OTP code to continue');
+    }
+
+    setLoading('downloadBtn', true, 'Verifying OTP...');
+
+    // Step 3: Verify OTP — receive download_token
+    const verifyReq = await api('POST', '/otp/verify', {
+      otp_id:   state.downloadOTP.otp_id,
+      otp_code: otpCode,
+    });
+
+    if (!verifyReq.ok || !verifyReq.data.success) {
+      throw new Error(verifyReq.data.error || 'OTP verification failed');
+    }
+
+    state.downloadOTP = null;
+
+    const downloadToken = verifyReq.data.download_token;
+    if (!downloadToken) throw new Error('No download token received from server');
+
+    setLoading('downloadBtn', true, action === 'view' ? 'Preparing preview...' : 'Downloading...');
+
+    const { ok, data } = await api(
+      'GET',
+      getProtectedFilePath(fileId, source, action),
+      null,
+      false,
+      { 'X-Download-Token': downloadToken }
+    );
+
     if (!ok || !data.success) throw new Error(data.error || 'Failed to retrieve file');
 
-    /*
-     * TODO: Client-side decryption using Web Crypto API
-     *
-     * 1. Decrypt the stored RSA private key with the user's password
-     *    (bcrypt KDF → AES-GCM, matching EncryptionService.decrypt_private_key)
-     * 2. Import the RSA private key via window.crypto.subtle.importKey
-     * 3. Decrypt the AES key: subtle.decrypt({ name:'RSA-OAEP' }, privateKey, encAesKeyBytes)
-     * 4. Decrypt the file:    subtle.decrypt({ name:'AES-GCM', iv }, aesKey, cipherBytes)
-     * 5. Trigger browser download of the plaintext blob
-     *
-     * data.file.encrypted_file     — hex string, IV(12B) + ciphertext + tag(16B)
-     * data.file.encrypted_aes_key  — hex string of RSA-OAEP-encrypted AES-256 key
-     */
+    setLoading('downloadBtn', true, 'Decrypting...');
+    
+    try {
+      const plaintext = await decryptProtectedFile(data.file, password);
 
-    toast('success', 'File retrieved', 'Decryption happens client-side using your private key.');
-    closeModal('downloadModal');
+      if (action === 'view') {
+        closeDownloadModal();
+        await window.fileViewer.openFileViewerModal({
+          filename: data.file.filename,
+          bytes: plaintext,
+          mimeType: data.file.mime_type,
+          extension: data.file.extension,
+          source,
+          ownerUsername: data.file.owner_username,
+        });
+        toast('success', 'Preview ready', 'File decrypted locally in your browser.');
+      } else {
+        triggerDownload(plaintext, data.file.filename, data.file.mime_type);
+        toast('success', 'File decrypted', 'Download starting...');
+        closeDownloadModal();
+      }
+    } catch (decryptError) {
+      throw new Error(`Decryption failed: ${decryptError.message}`);
+    }
+
   } catch (e) {
     alertEl.className   = 'alert alert-error';
     alertEl.textContent = e.message;
     alertEl.classList.remove('hidden');
   }
 
-  setLoading('downloadBtn', false, '🔓 Decrypt & Download');
+  setLoading('downloadBtn', false);
+  setDownloadButtonLabel(getActionButtonLabel(action, state.downloadOTP ? 'verify' : 'request'));
+}
+
+/**
+ * Helper: Trigger browser download of decrypted file.
+ * @param {Uint8Array} uint8array - Decrypted file bytes
+ * @param {string} filename - Filename to save as
+ * @param {string} mimeType - file MIME type
+ */
+function triggerDownload(uint8array, filename, mimeType = 'application/octet-stream') {
+  const blob = new Blob([uint8array], { type: mimeType });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href       = url;
+  a.download   = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /* ════════════════════════════════════════
@@ -338,9 +517,46 @@ function openDeleteModal(fileId, filename) {
  */
 async function confirmDelete() {
   if (!state.deleteTarget) return;
+  const fileId = state.deleteTarget;
 
   try {
-    const { ok, data } = await api('DELETE', `/files/${state.deleteTarget}`);
+    // Step 1: Request delete OTP
+    const otpReq = await api('POST', '/otp/send', {
+      purpose: 'delete_file',
+      file_id: fileId,
+    });
+
+    if (!otpReq.ok || !otpReq.data.success) {
+      toast('error', 'Delete failed', otpReq.data.error || 'Could not send OTP');
+      return;
+    }
+
+    const otpCode = window.prompt(
+      `${otpReq.data.message || 'An OTP has been sent to your email.'}\nEnter the 6-digit code to confirm deletion:`
+    );
+    if (!otpCode) return;
+
+    // Step 3: Verify OTP — receive download_token (used as delete authorisation)
+    const verifyReq = await api('POST', '/otp/verify', {
+      otp_id:   otpReq.data.otp_id,
+      otp_code: otpCode.trim(),
+    });
+
+    if (!verifyReq.ok || !verifyReq.data.success) {
+      toast('error', 'Delete failed', verifyReq.data.error || 'OTP invalid');
+      return;
+    }
+
+    const deleteToken = verifyReq.data.download_token;
+
+    // Step 4: Delete with token
+    const { ok, data } = await api(
+      'DELETE',
+      `/files/${fileId}`,
+      null,
+      false,
+      { 'X-Download-Token': deleteToken }
+    );
 
     if (ok && data.success) {
       closeModal('deleteModal');

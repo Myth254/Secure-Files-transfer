@@ -3,6 +3,7 @@ Request/Response Monitoring Middleware
 """
 import time
 import uuid
+from flask import request, g
 from src.extensions import db
 from src.models.monitoring import ApiRequestLog
 import logging
@@ -42,11 +43,6 @@ class MonitoringMiddleware:
                 except Exception:
                     pass
                 
-                # Get request size
-                request_size = 0
-                if request.data:
-                    request_size = len(request.data)
-                
                 # Redact sensitive query parameters before persisting to the log
                 safe_params = {
                     k: '***' if k.lower() in _SENSITIVE_PARAMS else v
@@ -65,15 +61,15 @@ class MonitoringMiddleware:
                     response_time=response_time,
                     ip_address=request.remote_addr,
                     user_agent=request.user_agent.string if request.user_agent else None,
-                    referer=request.referrer,
-                    request_size=request_size
+                    referer=request.referrer
                 )
                 db.session.add(log)
                 db.session.commit()
                 
                 # Emit real-time update via WebSocket
                 from src.extensions import socketio
-                socketio.emit('api_request', log.to_dict(), namespace='/monitoring')
+                if socketio is not None and hasattr(socketio, 'emit'):
+                    socketio.emit('api_request', log.to_dict(), namespace='/monitoring')
                 
             except Exception as e:
                 logger.error(f"Error saving API log: {e}")

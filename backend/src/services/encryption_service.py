@@ -10,12 +10,14 @@ Design notes
   password via Argon2id (time_cost=3, memory_cost=65536, parallelism=4).
   The old bcrypt.kdf(rounds=100) has been replaced — it offered negligible
   brute-force resistance.
-• generate_file_hash() returns a SHA-256 hex digest of the plaintext for
-  server-side deduplication.
+• generate_file_hash() returns an HMAC-SHA256 hex digest of the plaintext for
+  server-side deduplication without exposing a plaintext existence oracle.
 """
 import os
+import hmac
 import hashlib
 import bcrypt
+from flask import current_app, has_app_context
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey, RSAPrivateKey
@@ -270,6 +272,11 @@ class EncryptionService:
                 )
             )
 
+            if len(encrypted_file) < 28:
+                raise ValueError(
+                    f"Encrypted file too short ({len(encrypted_file)} bytes) to contain IV + tag"
+                )
+
             iv         = encrypted_file[:12]
             tag        = encrypted_file[-16:]
             ciphertext = encrypted_file[12:-16]
@@ -297,7 +304,7 @@ class EncryptionService:
     @staticmethod
     def generate_file_hash(file_data: bytes) -> str:
         """
-        Compute a SHA-256 digest of *file_data* for server-side deduplication.
+        Compute a keyed SHA-256 digest of *file_data* for server-side deduplication.
 
         Args:
             file_data: Raw (plaintext) file bytes.
@@ -305,7 +312,23 @@ class EncryptionService:
         Returns:
             Lowercase hex string (64 characters).
         """
-        return hashlib.sha256(file_data).hexdigest()
+        if has_app_context():
+            secret = (
+                current_app.config.get('FILE_HASH_SECRET')
+                or current_app.config.get('SECRET_KEY')
+            )
+        else:
+            secret = os.environ.get('FILE_HASH_SECRET') or os.environ.get('SECRET_KEY')
+
+        if not secret:
+            logger.warning("FILE_HASH_SECRET/SECRET_KEY unavailable; falling back to unkeyed SHA-256")
+            return hashlib.sha256(file_data).hexdigest()
+
+        return hmac.HMAC(
+            str(secret).encode('utf-8'),
+            file_data,
+            hashlib.sha256,
+        ).hexdigest()
 
     # ── Password hashing (bcrypt) ─────────────────────────────────────────
 

@@ -435,6 +435,67 @@ tbody td.primary { color: var(--text-primary); font-weight: 500; }
 .progress-fill.danger  { background: linear-gradient(90deg, var(--red-700), var(--red-500)); }
 
 /* ════════════════════════════════════════
+   PROGRESS STEPS
+════════════════════════════════════════ */
+.progress-step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+}
+
+.step-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+  font-weight: bold;
+  font-size: 1.25rem;
+}
+
+.step-text {
+  color: var(--text-secondary);
+}
+
+/* Pending state: gray circle */
+.progress-step.pending .step-icon {
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+}
+
+/* Loading state: rotating spinner, blue text */
+.progress-step.loading .step-icon {
+  color: var(--navy-600);
+  background: rgba(79, 115, 211, 0.1);
+  animation: spin 1s linear infinite;
+}
+
+.progress-step.loading .step-text {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Complete state: green checkmark */
+.progress-step.complete .step-icon {
+  color: var(--emerald-600);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.progress-step.complete .step-text {
+  color: var(--emerald-600);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ════════════════════════════════════════
    TOGGLE SWITCH
 ════════════════════════════════════════ */
 .toggle            { position: relative; width: 36px; height: 20px; flex-shrink: 0; }

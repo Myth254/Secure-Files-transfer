@@ -15,17 +15,29 @@
 async function init() {
   if (state.token) {
     try {
-      const { ok, data } = await api('GET', '/auth/verify');
+      const { ok, status, data } = await api('GET', '/auth/verify');
       if (ok && data.success) {
         state.user = data.user;
         enterDashboard();
         return;
       }
-    } catch { /* fall through */ }
+      
+      // Log the error for debugging
+      if (status === 401) {
+        console.warn('Token expired or invalid (401 Unauthorized)');
+      } else if (status === 404) {
+        console.warn('User no longer exists (404)');
+      } else {
+        console.warn('Token verification failed:', status, data);
+      }
+    } catch (error) {
+      console.error('Network error during token verification:', error);
+    }
 
     // Token invalid — clear and show login
     state.token = null;
     localStorage.removeItem('vaultsync_token');
+    console.info('Token cleared. User will need to log in again.');
   }
   showView('viewLogin');
 }
@@ -54,29 +66,29 @@ function enterDashboard() {
  * On success, transitions to OTP verification view.
  */
 async function handleLogin() {
-  const username = document.getElementById('loginUsername').value.trim();
+  const email    = document.getElementById('loginEmail').value.trim().toLowerCase();
   const password = document.getElementById('loginPassword').value;
   hideAlert('loginAlert');
 
-  if (!username || !password) {
-    showAlert('loginAlert', 'loginAlertMsg', 'Username and password are required');
+  if (!email || !password) {
+    showAlert('loginAlert', 'loginAlertMsg', 'Email and password are required');
     return;
   }
 
   setLoading('loginBtn', true, 'Verifying...');
 
   try {
-    const { ok, data } = await api('POST', '/auth/login', { username, password }, true);
+    const { ok, data } = await api('POST', '/auth/login', { email, password }, true);
 
     if (ok && data.success) {
       state.pendingOTP = {
         otp_id:     data.otp_id,
-        user_id:    data.user_id,
-        username:   data.username,
         email:      data.email,
         expires_in: data.expires_in,
       };
-      document.getElementById('otpEmailDisplay').textContent = data.email;
+      // Guard: active-OTP response only guarantees otp_id + expires_in
+      document.getElementById('otpEmailDisplay').textContent =
+        data.email || state.pendingOTP?.email || 'your registered email';
       startOTPTimer(data.expires_in || 600);
       showView('viewOTP');
     } else {
@@ -177,7 +189,6 @@ async function handleVerifyOTP() {
     const { ok, data } = await api('POST', '/auth/verify-login-otp', {
       otp_id:   state.pendingOTP.otp_id,
       otp_code: code,
-      user_id:  state.pendingOTP.user_id,
     }, true);
 
     if (ok && data.success) {
@@ -215,7 +226,6 @@ async function handleResendOTP() {
   try {
     const { ok, data } = await api('POST', '/auth/resend-login-otp', {
       otp_id:  state.pendingOTP.otp_id,
-      user_id: state.pendingOTP.user_id,
     }, true);
 
     if (ok && data.success) {
@@ -283,18 +293,27 @@ async function checkUsernameAvailability(username) {
 }
 
 /**
- * Update the 4-segment password strength bar.
+ * Update the 4-segment password strength bar and show missing requirements.
  * @param {string} password
  */
 function updatePasswordStrength(password) {
   const bars  = ['sb1','sb2','sb3','sb4'].map(id => document.getElementById(id));
   let score   = 0;
+  const issues = [];
 
   if (password.length >= 8)                            score++;
+  else issues.push("8+ chars");
+  
   if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score++;
+  else issues.push("upper+lower");
+  
   if (/[0-9]/.test(password))                          score++;
-  if (/[^A-Za-z0-9]/.test(password))                  score++;
+  else issues.push("number");
+  
+  if (/[!@#$%^&*()\-_=+\[\]{}|;:,.<>?]/.test(password))  score++;
+  else issues.push("special char");
 
+  // Update strength bars
   bars.forEach((bar, i) => {
     bar.className = 'strength-bar';
     if (i < score) {
@@ -303,6 +322,18 @@ function updatePasswordStrength(password) {
       else                 bar.classList.add('strong');
     }
   });
+  
+  // Show missing requirements hint
+  const hint = document.getElementById('passwordHint');
+  if (hint) {
+    if (issues.length > 0) {
+      hint.textContent = 'Missing: ' + issues.join(', ');
+      hint.style.color = 'var(--orange-400)';
+    } else {
+      hint.textContent = '✓ Password is strong';
+      hint.style.color = 'var(--emerald-400)';
+    }
+  }
 }
 
 /**
@@ -324,8 +355,22 @@ async function handleRegister() {
     showAlert('registerAlert', 'registerAlertMsg', 'Passwords do not match');
     return;
   }
-  if (password.length < 8) {
-    showAlert('registerAlert', 'registerAlertMsg', 'Password must be at least 8 characters');
+  
+  // Validate password strength (match backend requirements)
+  const issues = [];
+  if (password.length < 8)
+    issues.push("at least 8 characters");
+  if (!/[A-Z]/.test(password))
+    issues.push("one uppercase letter");
+  if (!/[a-z]/.test(password))
+    issues.push("one lowercase letter");
+  if (!/[0-9]/.test(password))
+    issues.push("one number");
+  if (!/[!@#$%^&*()\-_=+\[\]{}|;:,.<>?]/.test(password))
+    issues.push("one special character");
+  
+  if (issues.length > 0) {
+    showAlert('registerAlert', 'registerAlertMsg', 'Password must contain: ' + issues.join(', '));
     return;
   }
 
@@ -335,13 +380,15 @@ async function handleRegister() {
     const { ok, data } = await api('POST', '/auth/register', { username, email, password }, true);
 
     if (ok && data.success) {
-      state.token         = data.token;
-      state.user          = { id: data.user.id, username: data.user.username, email: data.user.email };
-      state.pendingRegister = data.rsa_private_key;
+      state.token               = data.token;
+      state.user                = { id: data.user.id, username: data.user.username, email: data.user.email };
+      state.pendingRegister     = data.encrypted_private_key;
+      state.encryptedPrivateKey = data.encrypted_private_key;
 
       localStorage.setItem('vaultsync_token', state.token);
-      showKeyBackup(data.rsa_private_key);
-      toast('success', 'Account created!', 'Please save your private key securely.');
+      localStorage.setItem('vaultsync_enc_key', data.encrypted_private_key);
+      showKeyBackup(data.encrypted_private_key);
+      toast('success', 'Account created!', 'Please save your encrypted private key securely.');
     } else {
       showAlert('registerAlert', 'registerAlertMsg', data.error || 'Registration failed');
     }
@@ -408,9 +455,11 @@ function proceedAfterKeyBackup() {
 async function handleLogout() {
   try { await api('POST', '/auth/logout'); } catch { /* best effort */ }
 
-  state.token = null;
-  state.user  = null;
+  state.token               = null;
+  state.user                = null;
+  state.encryptedPrivateKey = null;
   localStorage.removeItem('vaultsync_token');
+  localStorage.removeItem('vaultsync_enc_key');
   stopMetricsPolling();
   showView('viewLogin');
   toast('info', 'Logged out', 'Your session has ended.');

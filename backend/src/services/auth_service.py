@@ -23,6 +23,8 @@ from src.utils.exceptions import AuthenticationError, ValidationError
 
 logger = logging.getLogger(__name__)
 
+_DUMMY_PASSWORD_HASH = "$2b$12$JDNeUbtijyMAcNAyvsAUd.dQnoOy2RqIuWgouLylm6dAf82qXa5gy"
+
 
 class AuthService:
     """Service for authentication and user management."""
@@ -145,9 +147,9 @@ class AuthService:
             email    = email.strip().lower()
 
             # ── Uniqueness ────────────────────────────────────────────────
-            if User.query.filter_by(username=username).first():
+            if db.session.query(User).filter_by(username=username).first():
                 raise ValidationError("Username already exists")
-            if User.query.filter_by(email=email).first():
+            if db.session.query(User).filter_by(email=email).first():
                 raise ValidationError("Email already registered")
 
             # ── Crypto ───────────────────────────────────────────────────
@@ -183,6 +185,36 @@ class AuthService:
     # ── Authentication ────────────────────────────────────────────────────
 
     @staticmethod
+    def _authenticate_user_by_field(field_name: str, field_value: str, password: str) -> User:
+        """Verify credentials using a unique user field such as username or email."""
+        try:
+            user = db.session.query(User).filter_by(**{field_name: field_value}).first()
+
+            # Use a constant-time comparison path regardless of whether the
+            # user exists to mitigate timing-based account enumeration.
+            if not user:
+                EncryptionService.verify_password("dummy-password", _DUMMY_PASSWORD_HASH)
+                logger.warning(f"Auth failed: unknown {field_name} '{field_value}'")
+                raise AuthenticationError("Invalid credentials")
+
+            if not EncryptionService.verify_password(password, user.password_hash):
+                logger.warning(f"Auth failed: wrong password for {field_name} '{field_value}'")
+                raise AuthenticationError("Invalid credentials")
+
+            if not user.is_active:
+                logger.warning(f"Auth failed: inactive account {field_name}='{field_value}'")
+                raise AuthenticationError("Account is disabled")
+
+            logger.info(f"User authenticated by {field_name}: {field_value} (id={user.id})")
+            return user
+
+        except AuthenticationError:
+            raise
+        except Exception as e:
+            logger.error(f"Authentication error for {field_name} '{field_value}': {e}")
+            raise AuthenticationError("Authentication failed. Please try again.")
+
+    @staticmethod
     def authenticate_user(username: str, password: str) -> User:
         """
         Verify credentials and return the authenticated User.
@@ -191,33 +223,24 @@ class AuthService:
             AuthenticationError: on any failure (deliberately generic message
                                  to prevent username enumeration).
         """
-        try:
-            user = User.query.filter_by(username=username).first()
+        return AuthService._authenticate_user_by_field(
+            field_name='username',
+            field_value=username.strip(),
+            password=password,
+        )
 
-            # Use a constant-time comparison path regardless of whether the
-            # user exists to mitigate timing-based username enumeration.
-            if not user:
-                # Hash a dummy value so timing is similar
-                EncryptionService.verify_password("dummy", "$2b$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-                logger.warning(f"Auth failed: unknown username '{username}'")
-                raise AuthenticationError("Invalid credentials")
+    @staticmethod
+    def authenticate_user_by_email(email: str, password: str) -> User:
+        """
+        Verify credentials and return the authenticated User using email.
 
-            if not EncryptionService.verify_password(password, user.password_hash):
-                logger.warning(f"Auth failed: wrong password for '{username}'")
-                raise AuthenticationError("Invalid credentials")
-
-            if not user.is_active:
-                logger.warning(f"Auth failed: inactive account '{username}'")
-                raise AuthenticationError("Account is disabled")
-
-            logger.info(f"User authenticated: {username} (id={user.id})")
-            return user
-
-        except AuthenticationError:
-            raise
-        except Exception as e:
-            logger.error(f"Authentication error for '{username}': {e}")
-            raise AuthenticationError("Authentication failed. Please try again.")
+        Login is intentionally email-first for client authentication flows.
+        """
+        return AuthService._authenticate_user_by_field(
+            field_name='email',
+            field_value=email.strip().lower(),
+            password=password,
+        )
 
     # ── Lookups ───────────────────────────────────────────────────────────
 
@@ -265,7 +288,7 @@ class AuthService:
                     raise ValidationError(f"Invalid email: {error}")
 
                 new_email = new_email.strip().lower()
-                existing = User.query.filter_by(email=new_email).first()
+                existing = db.session.query(User).filter_by(email=new_email).first()
                 if existing and existing.id != user_id:
                     raise ValidationError("Email already in use")
 
@@ -311,7 +334,7 @@ class AuthService:
             if not is_valid:
                 return {'available': False, 'valid': False, 'message': error}
 
-            taken = User.query.filter_by(username=username.strip()).first() is not None
+            taken = db.session.query(User).filter_by(username=username.strip()).first() is not None
             return {
                 'available': not taken,
                 'valid':     True,
@@ -330,7 +353,7 @@ class AuthService:
                 return {'available': False, 'valid': False, 'message': error}
 
             email = email.strip().lower()
-            taken = User.query.filter_by(email=email).first() is not None
+            taken = db.session.query(User).filter_by(email=email).first() is not None
             return {
                 'available': not taken,
                 'valid':     True,

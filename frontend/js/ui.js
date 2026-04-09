@@ -191,7 +191,7 @@ function formatDate(iso) {
 ════════════════════════════════════════ */
 const FILE_EMOJI_MAP = {
   pdf: '📕', jpg: '🖼', jpeg: '🖼', png: '🖼', gif: '🖼', webp: '🖼',
-  doc: '📝', docx: '📝', xls: '📊', xlsx: '📊', ppt: '📋', pptx: '📋',
+  doc: '📝', docx: '📝', odt: '📝', xls: '📊', xlsx: '📊', ppt: '📋', pptx: '📋',
   txt: '📄', zip: '🗜', rar: '🗜',
 };
 
@@ -199,7 +199,7 @@ const FILE_CLASS_MAP = {
   jpg: 'file-icon-img', jpeg: 'file-icon-img', png: 'file-icon-img',
   gif: 'file-icon-img', webp: 'file-icon-img',
   pdf: 'file-icon-pdf',
-  doc: 'file-icon-doc', docx: 'file-icon-doc',
+  doc: 'file-icon-doc', docx: 'file-icon-doc', odt: 'file-icon-doc',
   xls: 'file-icon-xls', xlsx: 'file-icon-xls',
   ppt: 'file-icon-ppt', pptx: 'file-icon-ppt',
   txt: 'file-icon-txt',
@@ -268,11 +268,12 @@ function switchPage(page) {
   document.getElementById('topbarBreadcrumb').textContent = breadcrumb;
 
   // Trigger page-specific data loading
-  if (page === 'files')      loadFiles();
-  if (page === 'share')      loadShareData();
-  if (page === 'monitoring') { loadMonitoring(); startMetricsPolling(); }
-  else                       stopMetricsPolling();
-  if (page === 'profile')    { loadProfile(); loadActivity(); }
+  // Guards prevent ReferenceError if a module script hasn't loaded yet
+  if (page === 'files'     && typeof loadFiles      === 'function') loadFiles();
+  if (page === 'share'     && typeof loadShareData  === 'function') loadShareData();
+  if (page === 'monitoring' && typeof loadMonitoring === 'function') { loadMonitoring(); startMetricsPolling(); }
+  else if (page !== 'monitoring' && typeof stopMetricsPolling === 'function') stopMetricsPolling();
+  if (page === 'profile'   && typeof loadProfile    === 'function') { loadProfile(); loadActivity(); }
 }
 
 /* ════════════════════════════════════════
@@ -281,7 +282,11 @@ function switchPage(page) {
 
 // Close modal when clicking its overlay backdrop
 document.addEventListener('click', (e) => {
-  if (e.target.classList.contains('modal-overlay')) {
+  if (e.target.id === 'fileViewerModal' && typeof closeFileViewerModal === 'function') {
+    closeFileViewerModal();
+  } else if (e.target.id === 'downloadModal' && typeof closeDownloadModal === 'function') {
+    closeDownloadModal();
+  } else if (e.target.classList.contains('modal-overlay')) {
     e.target.classList.add('hidden');
   }
 });
@@ -289,6 +294,16 @@ document.addEventListener('click', (e) => {
 // Escape key closes all open modals
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (!document.getElementById('fileViewerModal')?.classList.contains('hidden') &&
+        typeof closeFileViewerModal === 'function') {
+      closeFileViewerModal();
+      return;
+    }
+    if (!document.getElementById('downloadModal')?.classList.contains('hidden') &&
+        typeof closeDownloadModal === 'function') {
+      closeDownloadModal();
+      return;
+    }
     document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden'));
   }
 });

@@ -28,7 +28,7 @@
         ondragleave="this.classList.remove('drag-over')"
         ondrop="handleFileDrop(event)">
         <input type="file" id="fileInput"
-          accept=".pdf,.txt,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+          accept=".pdf,.txt,.jpg,.jpeg,.png,.doc,.docx,.odt,.xls,.xlsx,.ppt,.pptx"
           onchange="handleFileSelect(event)">
         <div class="upload-icon">📄</div>
         <div class="upload-title">Drop file here or click to browse</div>
@@ -40,6 +40,7 @@
           <span class="type-chip">PNG</span>
           <span class="type-chip">DOC</span>
           <span class="type-chip">DOCX</span>
+          <span class="type-chip">ODT</span>
           <span class="type-chip">XLS</span>
           <span class="type-chip">XLSX</span>
           <span class="type-chip">PPT</span>
@@ -90,17 +91,50 @@
 
 
 <!-- ══════════════════════════════
+     MODAL: FILE VIEWER
+══════════════════════════════ -->
+<div id="fileViewerModal" class="modal-overlay hidden">
+  <div class="modal file-viewer-modal">
+    <div class="modal-header">
+      <div>
+        <h3 class="card-title" id="fileViewerTitle">File Preview</h3>
+        <p class="card-subtitle" id="fileViewerSubtitle">Decrypted locally in your browser</p>
+      </div>
+      <button class="btn btn-ghost"
+        onclick="closeFileViewerModal()">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="viewer-meta" id="fileViewerMeta"></div>
+      <div class="viewer-alert hidden" id="fileViewerAlert"></div>
+      <div class="viewer-surface" id="fileViewerBody">
+        <div class="table-empty">
+          <div class="table-empty-icon">👁</div>
+          <div class="table-empty-text">Preparing preview…</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary"
+        onclick="closeFileViewerModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════
      MODAL: DECRYPT & DOWNLOAD
 ══════════════════════════════ -->
 <div id="downloadModal" class="modal-overlay hidden">
   <div class="modal">
     <div class="modal-header">
       <div>
-        <h3 class="card-title">Decrypt &amp; Download</h3>
-        <p class="card-subtitle">Enter your password to decrypt the file</p>
+        <h3 class="card-title" id="downloadModalTitle">Decrypt &amp; Download</h3>
+        <p class="card-subtitle" id="downloadModalSubtitle">Step 1: Enter password → Step 2: Request OTP → Step 3: Enter code → Download</p>
       </div>
       <button class="btn btn-ghost"
-        onclick="closeModal('downloadModal')">✕</button>
+        onclick="closeDownloadModal()">✕</button>
     </div>
 
     <div class="modal-body">
@@ -110,6 +144,11 @@
           Decryption happens locally in your browser.
           Your private key never leaves your device.
         </div>
+      </div>
+
+      <div id="downloadStepIndicator" class="alert alert-info hidden">
+        <span class="alert-icon">⏳</span>
+        <div class="alert-content" id="downloadStepText">Shared file downloads require a one-time code sent to your email.</div>
       </div>
 
       <div class="form-group">
@@ -133,15 +172,28 @@
         <div class="form-hint">Required to decrypt your RSA private key</div>
       </div>
 
+      <div class="form-group hidden" id="downloadOtpGroup">
+        <label class="form-label">
+          Email OTP <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">🔑</span>
+          <input type="text" id="downloadOtpCode" class="form-input"
+            inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+            placeholder="Enter the 6-digit code">
+        </div>
+        <div class="form-hint" id="downloadOtpHint">Enter the code we sent to your email to continue.</div>
+      </div>
+
       <div id="downloadAlert" class="alert alert-error hidden"></div>
     </div>
 
     <div class="modal-footer">
       <button class="btn btn-secondary"
-        onclick="closeModal('downloadModal')">Cancel</button>
+        onclick="closeDownloadModal()">Cancel</button>
       <button class="btn btn-success" id="downloadBtn"
         onclick="handleDownload()">
-        🔓 Decrypt &amp; Download
+        🔓 Request OTP
       </button>
     </div>
   </div>
@@ -174,6 +226,12 @@
         You are about to delete:
         <strong class="text-primary" id="deleteFileName">—</strong>
       </p>
+      <div class="alert alert-warning" style="margin-top:0.75rem">
+        <span class="alert-icon">📧</span>
+        <div class="alert-content">
+          An OTP will be sent to your email to confirm this deletion.
+        </div>
+      </div>
     </div>
 
     <div class="modal-footer">
@@ -201,6 +259,13 @@
     </div>
 
     <div class="modal-body">
+      <div class="alert alert-info">
+        <span class="alert-icon">🔐</span>
+        <div class="alert-content">
+          Your file key will be securely re-encrypted in your browser for the recipient.
+          You will be prompted for your password to authorize this.
+        </div>
+      </div>
       <div class="form-group">
         <label class="form-label">
           Select File <span class="required">*</span>
@@ -277,6 +342,94 @@
         onclick="closeModal('shareModal')">Cancel</button>
       <button class="btn btn-primary"
         onclick="handleShareRequest()">📤 Send Request</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════
+     MODAL: PASSWORD PROMPT (for key re-wrapping authorization)
+══════════════════════════════ -->
+<div id="passwordPromptModal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <h3 class="card-title">Authorize Key Re-Wrapping</h3>
+      <button class="btn btn-ghost"
+        onclick="closeModal('passwordPromptModal')">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <p class="text-sm text-secondary mb-4">
+        Enter your password to authorize re-wrapping the file key for the recipient:
+        <strong id="passwordPromptRecipient" class="text-primary">—</strong>
+      </p>
+
+      <div class="form-group">
+        <label class="form-label">
+          Your Password <span class="required">*</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">🔒</span>
+          <input type="password" id="passwordPromptInput" class="form-input"
+            placeholder="Enter your password"
+            autocomplete="current-password"
+            onkeypress="if(event.key==='Enter') confirmPasswordPrompt()">
+          <span class="input-suffix"
+            onclick="togglePasswordVisibility('passwordPromptInput', this)">👁</span>
+        </div>
+      </div>
+
+      <div id="passwordPromptAlert" class="alert alert-error hidden"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary"
+        onclick="closeModal('passwordPromptModal'); cancelShareFlow()">Cancel</button>
+      <button class="btn btn-primary"
+        onclick="confirmPasswordPrompt()" id="passwordPromptConfirm">
+        ✓ Authorize
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════
+     MODAL: SHARE PROGRESS (during key re-wrapping)
+══════════════════════════════ -->
+<div id="shareProgressModal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <h3 class="card-title">Sharing File</h3>
+    </div>
+
+    <div class="modal-body" style="text-align:center">
+      <div style="margin:2rem 0">
+        <div style="font-size:2rem; margin-bottom:1rem">⏳</div>
+        <div id="shareProgressText" class="text-sm text-secondary">
+          Performing key re-wrapping…
+        </div>
+      </div>
+
+      <!-- Step indicators -->
+      <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border-subtle); text-align:left">
+        <div id="progressStep1" class="progress-step pending">
+          <span class="step-icon">○</span>
+          <span class="step-text">Fetching keys…</span>
+        </div>
+        <div id="progressStep2" class="progress-step pending">
+          <span class="step-icon">○</span>
+          <span class="step-text">Decrypting your key…</span>
+        </div>
+        <div id="progressStep3" class="progress-step pending">
+          <span class="step-icon">○</span>
+          <span class="step-text">Re-wrapping for recipient…</span>
+        </div>
+        <div id="progressStep4" class="progress-step pending">
+          <span class="step-icon">○</span>
+          <span class="step-text">Sending request…</span>
+        </div>
+      </div>
     </div>
   </div>
 </div>

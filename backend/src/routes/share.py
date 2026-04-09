@@ -22,11 +22,12 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
-from src.extensions import db
+from src.extensions import db, socketio
 from src.models.file import File
 from src.models.share import ShareRequest, SharedAccess, ShareLog
+from src.services.file_service import FileService
 from src.services.share_service import ShareService
-from src.utils.exceptions import ValidationError
+from src.utils.exceptions import ValidationError, FileError
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,18 @@ def request_share():
             aes_key_bytes = bytes.fromhex(recipient_encrypted_aes_key)
         except ValueError:
             return jsonify({'success': False, 'error': 'recipient_encrypted_aes_key must be hex-encoded'}), 400
+        
+        # RSA-2048-OAEP always produces exactly 256 bytes of ciphertext.
+        # Reject anything else as a sanity check (F-05).
+        if len(aes_key_bytes) != 256:
+            return jsonify({
+                'success': False,
+                'error': (
+                    f'recipient_encrypted_aes_key has invalid length '
+                    f'(expected 256 bytes for RSA-2048-OAEP, got {len(aes_key_bytes)}). '
+                    f'Ensure key re-wrapping was performed correctly on the client side.'
+                ),
+            }), 400
 
         share_request = ShareService.request_file_share(
             owner_id=user_id,
@@ -82,6 +95,14 @@ def request_share():
             can_reshare=data.get('can_reshare', False),
             expires_days=data.get('expires_days'),
         )
+
+        socketio.emit('share_requested', {
+            'request_id':   share_request.id,
+            'file_id':      share_request.file_id,
+            'owner_id':     share_request.owner_id,
+            'recipient_id': share_request.recipient_id,
+            'timestamp':    datetime.now(timezone.utc).isoformat(),
+        }, namespace='/monitoring')
 
         return jsonify({
             'success':       True,
@@ -205,58 +226,86 @@ def download_shared_file(file_id):
                 'file_id':     file_id,
             }), 403
 
+        file_data = FileService.get_file_for_access(user_id, file_id, required_permission='download')
+
         access = (
             SharedAccess.query
             .filter_by(file_id=file_id, recipient_id=user_id)
             .filter(SharedAccess.revoked_at.is_(None))
             .first()
         )
-
-        if not access:
-            return jsonify({'success': False, 'error': 'No access to this file'}), 403
-        if not access.can_download:
-            return jsonify({'success': False, 'error': 'Download permission not granted'}), 403
-
-        file_obj = db.session.get(File, file_id)
-        if not file_obj:
-            return jsonify({'success': False, 'error': 'File not found'}), 404
-
-        # Fetch the recipient-specific wrapped AES key from the share request
-        share_req = db.session.get(ShareRequest, access.share_request_id)
-        if not share_req or not share_req.encrypted_aes_key:
-            return jsonify({
-                'success': False,
-                'error':   'Recipient AES key is not available for this share',
-            }), 500
-
-        access.download_count += 1
-        access.last_accessed   = datetime.now(timezone.utc)
-
-        db.session.add(ShareLog(
-            share_request_id=access.share_request_id,
-            user_id=user_id,
-            action='download',
-            details=f'Downloaded shared file "{file_obj.filename}"',
-        ))
+        if access:
+            db.session.add(ShareLog(
+                share_request_id=access.share_request_id,
+                user_id=user_id,
+                action='download',
+                details=f'Downloaded shared file "{file_data["filename"]}"',
+            ))
         db.session.commit()
 
-        return jsonify({
-            'success': True,
-            'file': {
-                'filename':      file_obj.filename,
-                'original_size': file_obj.original_size,
-                'encrypted_file':    file_obj.encrypted_file.hex(),
-                # Recipient-specific key — NOT the owner's key
-                'encrypted_aes_key': share_req.encrypted_aes_key.hex()
-                    if isinstance(share_req.encrypted_aes_key, bytes)
-                    else share_req.encrypted_aes_key,
-            },
-        }), 200
+        return jsonify({'success': True, 'file': file_data}), 200
 
+    except (ValidationError, FileError) as known:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(known)}), 403
     except Exception:
         db.session.rollback()
         logger.error(f"[{err_id}] download_shared_file({file_id}) failed", exc_info=True)
         return jsonify({'success': False, 'error': 'Download failed', 'error_id': err_id}), 500
+
+
+@share_bp.route('/shared-files/<int:file_id>/content', methods=['GET'])
+@jwt_required()
+def get_shared_file_content(file_id):
+    """
+    Return encrypted blobs for client-side preview or download of a shared file.
+    The API never returns plaintext.
+    """
+    err_id = uuid.uuid4().hex
+    try:
+        from src.utils.security import SecurityUtils
+
+        user_id        = int(get_jwt_identity())
+        intent         = request.args.get('intent', 'view')
+        download_token = request.headers.get('X-Download-Token', '')
+
+        if intent not in ('view', 'download'):
+            return jsonify({'success': False, 'error': 'intent must be view or download'}), 400
+
+        if not SecurityUtils.verify_otp_download_token(download_token, user_id, file_id):
+            return jsonify({
+                'success':     False,
+                'error':       'A valid OTP download token is required',
+                'require_otp': True,
+                'purpose':     'file_download',
+                'file_id':     file_id,
+            }), 403
+
+        file_data = FileService.get_file_for_access(user_id, file_id, required_permission=intent)
+        access = (
+            SharedAccess.query
+            .filter_by(file_id=file_id, recipient_id=user_id)
+            .filter(SharedAccess.revoked_at.is_(None))
+            .first()
+        )
+        if access:
+            db.session.add(ShareLog(
+                share_request_id=access.share_request_id,
+                user_id=user_id,
+                action=intent,
+                details=f'{intent.title()}ed shared file "{file_data["filename"]}"',
+            ))
+        db.session.commit()
+
+        return jsonify({'success': True, 'intent': intent, 'file': file_data}), 200
+
+    except (ValidationError, FileError) as known:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(known)}), 403
+    except Exception:
+        db.session.rollback()
+        logger.error(f"[{err_id}] get_shared_file_content({file_id}) failed", exc_info=True)
+        return jsonify({'success': False, 'error': 'Failed to retrieve shared file content', 'error_id': err_id}), 500
 
 
 @share_bp.route('/stats', methods=['GET'])
@@ -266,28 +315,8 @@ def get_share_stats():
     try:
         user_id = int(get_jwt_identity())
 
-        shares_sent      = ShareRequest.query.filter_by(owner_id=user_id).count()
-        shares_accepted  = ShareRequest.query.filter_by(owner_id=user_id, status='accepted').count()
-        shares_received  = ShareRequest.query.filter_by(recipient_id=user_id).count()
-        files_accessible = (
-            SharedAccess.query
-            .filter_by(recipient_id=user_id)
-            .filter(SharedAccess.revoked_at.is_(None))
-            .count()
-        )
-
-        return jsonify({
-            'success': True,
-            'stats': {
-                'shares_sent':      shares_sent,
-                'shares_accepted':  shares_accepted,
-                'shares_received':  shares_received,
-                'files_accessible': files_accessible,
-                'acceptance_rate':  round(
-                    (shares_accepted / shares_sent * 100) if shares_sent > 0 else 0, 2
-                ),
-            },
-        }), 200
+        result = ShareService.get_share_stats(user_id)
+        return jsonify(result), 200
 
     except Exception:
         logger.error(f"[{err_id}] get_share_stats failed", exc_info=True)

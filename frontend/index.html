@@ -89,16 +89,27 @@
   SCRIPTS — loader.js must be first.
   It fetches all HTML partials and fires 'partialsReady'.
   app.js listens for that event and then calls init().
+  Using 'defer' ensures all scripts are parsed before app initialization.
 -->
-<script src="js/loader.js"></script>
-<script src="js/api.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/auth.js"></script>
-<script src="js/files.js"></script>
-<script src="js/sharing.js"></script>
-<script src="js/monitoring.js"></script>
-<script src="js/profile.js"></script>
-<script src="js/app.js"></script>
+<script defer src="js/loader.js"></script>
+<script defer src="js/api.js"></script>
+<script defer src="js/ui.js"></script>
+<script defer src="js/auth.js"></script>
+<script defer src="js/files.js"></script>
+<script defer src="js/sharing.js"></script>
+<script defer src="js/monitoring.js"></script>
+<script defer src="js/profile.js"></script>
+
+<!-- Cryptography — Argon2id WASM + client-side key re-wrapping -->
+<!-- Note: Argon2 CDN script has no defer; crypto.js depends on synchronous availability -->
+<script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js"></script>
+<script defer src="js/crypto.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+<script defer src="js/file-viewer.js"></script>
+
+<script defer src="js/app.js"></script>
 
 </body>
 </html>

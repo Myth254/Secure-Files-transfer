@@ -1,0 +1,363 @@
+﻿Secure File Transfer & Encryption Platform
+Full-System Analysis: File Sharing & Key Re-Wrapping
+AES-256-GCM + RSA-2048-OAEP Hybrid Encryption Architecture
+
+1. Executive Summary
+This document provides a complete analysis of the file-sharing subsystem, traces the root cause of the key re-wrapping error, and delivers concrete, production-ready fixes across all affected layers.
+
+The error message  "File sharing requires client-side key re-wrapping which is not yet implemented"  is a server-side guard. All client-side machinery (crypto.js, sharing.js) is already implemented and correct. The gaps are:
+
+    • A missing GET /files/:id/key endpoint that sharing.js expects
+    • A missing GET /user/me/private-key endpoint that sharing.js expects
+    • A missing GET /user/public-key/:username endpoint that sharing.js expects
+    • The server-side share route not accepting the recipient_encrypted_aes_key field from sharing.js
+
+2. File Sharing Flow — Complete Trace
+
+2.1 Upload Path (How AES Keys Are Stored)
+When a file is uploaded the following sequence executes server-side:
+
+    1. User POSTs multipart file to POST /api/files/upload
+    2. FileService.upload_file() validates, reads file bytes, fetches owner User record
+    3. EncryptionService.encrypt_file(file_data, owner.rsa_public_key) is called
+        ◦ Generates random 32-byte AES key
+        ◦ Encrypts file: IV(12B) || AES-GCM(ciphertext) || GCM-tag(16B)
+        ◦ Wraps AES key with owner RSA-OAEP-SHA256 public key
+        ◦ Returns (encrypted_file_bytes, encrypted_aes_key_bytes)
+    4. File record saved: encrypted_file (LargeBinary), encrypted_aes_key (LargeBinary), file_hash, filename, owner_id
+
+Key storage guarantee: no plaintext AES key or file ever touches the database or disk.
+
+2.2 Share Request Path (Current / Intended)
+The sharing.js frontend performs these steps inside confirmPasswordPrompt():
+
+    5. Fetch encrypted AES key for the file  —  GET /files/:id/key
+    6. Fetch recipient RSA public key  —  GET /user/public-key/:username
+    7. Fetch caller's encrypted private key  —  GET /user/me/private-key
+    8. Decrypt private key using Argon2id+AES-256-GCM in browser (crypto.js)
+    9. Unwrap owner AES key with owner private key (RSA-OAEP, Web Crypto)
+    10. Re-wrap raw AES key with recipient public key (RSA-OAEP, Web Crypto)
+    11. POST /share/request with { file_id, recipient_username, recipient_encrypted_aes_key (hex) }
+
+The backend share_service.py already stores the recipient_encrypted_aes_key on ShareRequest.encrypted_aes_key (LargeBinary) and file_service.py already serves it back to the recipient during download via the SharedAccess path. The pipeline is architecturally complete — only the three HTTP endpoints are absent.
+
+2.3 Download Path (Recipient)
+    12. Recipient authenticates, requests OTP (purpose: file_download)
+    13. Recipient verifies OTP, receives download_token
+    14. GET /files/:id with X-Download-Token header
+    15. FileService.get_file_for_download() detects SharedAccess record, returns encrypted_file (hex) and encrypted_aes_key (hex) from ShareRequest.encrypted_aes_key — i.e. the recipient-wrapped key
+    16. Browser calls crypto_module.decryptFile() — decrypts AES key with recipient private key, decrypts file with AES-256-GCM
+
+3. Gap Analysis
+
+Component	Status	Notes
+crypto.js — decryptPrivateKeyPem	COMPLETE	Argon2id + AES-GCM, matches server KDF exactly
+crypto.js — importPrivateKey / importPublicKey	COMPLETE	RSA-OAEP SHA-256, non-extractable
+crypto.js — rewrapAesKey	COMPLETE	Unwrap + re-wrap in browser, raw key never leaves function
+crypto.js — decryptFile	COMPLETE	Full AES-GCM decrypt for recipient download
+sharing.js — confirmPasswordPrompt()	COMPLETE	4-step key re-wrap flow, correct payload
+files.js — handleDownload()	PARTIAL	Client-side decrypt call commented out (TODO)
+GET /files/:id/key	MISSING	sharing.js line 119 calls this; endpoint does not exist
+GET /user/me/private-key	MISSING	sharing.js line 141 calls this; endpoint does not exist
+GET /user/public-key/:username	MISSING	sharing.js line 128-129 calls this; endpoint does not exist
+POST /share/request — accepts hex AES key	PARTIAL	share_service.py accepts bytes, but route may not parse hex from JSON
+file_service — SharedAccess download key path	COMPLETE	Returns share_request.encrypted_aes_key to recipient
+EncryptionService.rewrap_aes_key()	COMPLETE	Server-side fallback exists but should not be used
+
+4. Concrete Fixes
+
+4.1 Add Three Missing API Endpoints
+Add these to the appropriate route blueprint (files.py and user.py):
+
+4.1.1  GET /api/files/<int:file_id>/key
+Returns the caller's encrypted AES key for a file they own. Sharing.js uses this to get the ciphertext it will re-wrap.
+
+@files_bp.route('/<int:file_id>/key', methods=['GET'])
+@jwt_required()
+def get_file_key(file_id):
+    user_id = int(get_jwt_identity())
+    file = db.session.query(File).filter_by(id=file_id, owner_id=user_id).first()
+    if not file:
+        return jsonify({'success': False, 'error': 'File not found'}), 404
+    return jsonify({
+        'success': True,
+        'encrypted_aes_key': file.encrypted_aes_key.hex()
+    })
+
+4.1.2  GET /api/user/me/private-key
+Returns the caller's encrypted private key envelope (salt:iv:ct:tag). The client decrypts this locally with their password. The server never holds the plaintext key.
+
+@user_bp.route('/me/private-key', methods=['GET'])
+@jwt_required()
+def get_my_private_key():
+    user_id = int(get_jwt_identity())
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+    return jsonify({
+        'success': True,
+        'encrypted_private_key': user.rsa_private_key_encrypted
+    })
+
+4.1.3  GET /api/user/public-key/<username>
+Returns a user's RSA public key by username. Sharing.js uses this to re-encrypt the AES key for the recipient.
+
+@user_bp.route('/public-key/<username>', methods=['GET'])
+@jwt_required()
+def get_user_public_key(username):
+    user = db.session.query(User).filter_by(username=username, is_active=True).first()
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+    return jsonify({
+        'success': True,
+        'public_key': user.rsa_public_key
+    })
+
+4.2 Fix POST /api/share/request — Hex-to-Bytes Conversion
+sharing.js sends recipient_encrypted_aes_key as a hex string inside JSON. The share route must convert it to bytes before passing it to ShareService. Add this to the share blueprint handler:
+
+data = request.get_json()
+hex_key = data.get('recipient_encrypted_aes_key', '')
+if not hex_key:
+    return jsonify({'success': False, 'error': 'Missing re-wrapped AES key'}), 400
+try:
+    recipient_aes_key_bytes = bytes.fromhex(hex_key)
+except ValueError:
+    return jsonify({'success': False, 'error': 'Invalid key encoding'}), 400
+
+share = ShareService.request_file_share(
+    owner_id=current_user.id,
+    file_id=data['file_id'],
+    recipient_username=data['recipient_username'],
+    recipient_encrypted_aes_key=recipient_aes_key_bytes,
+    can_view=data.get('can_view', True),
+    can_download=data.get('can_download', True),
+    can_reshare=data.get('can_reshare', False),
+    expires_days=data.get('expires_days'),
+)
+
+4.3 Wire Up Client-Side File Decryption in files.js
+The handleDownload() function in files.js already fetches the encrypted file and has a commented-out TODO block. Uncomment and complete it:
+
+// After receiving data.file.encrypted_file and data.file.encrypted_aes_key:
+const password = document.getElementById('downloadPassword').value;
+const encPrivKey = await api('GET', '/user/me/private-key');
+const privKeyPem = await window.crypto_module.decryptPrivateKeyPem(
+    encPrivKey.data.encrypted_private_key, password
+);
+const plaintext = await window.crypto_module.decryptFile(
+    data.file.encrypted_file,
+    data.file.encrypted_aes_key,
+    privKeyPem
+);
+triggerDownload(plaintext, data.file.filename);
+
+Add the triggerDownload helper:
+
+function triggerDownload(uint8array, filename) {
+  const blob = new Blob([uint8array]);
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+5. Multi-Recipient Sharing (Batch Key Wrapping)
+
+To share a file with multiple recipients in one operation, extend the frontend and backend as follows.
+
+5.1 Frontend — sharing.js
+Replace the single-recipient flow with a batch loop before the final POST:
+
+// recipients: string[] from a multi-select input
+const wrapped = [];
+for (const username of recipients) {
+  const resp = await api('GET', `/user/public-key/${username}`);
+  const recipPub = await window.crypto_module.importPublicKey(resp.data.public_key);
+  const keyHex = await window.crypto_module.rewrapAesKey(
+    ownerEncAesKeyHex, myPrivKey, recipPub),
+  wrapped.push({ username, encrypted_aes_key: keyHex });
+}
+await api('POST', '/share/request/batch', {
+  file_id: shareContext.fileId,
+  recipients: wrapped,   // [{ username, encrypted_aes_key }]
+  can_download, can_reshare, expires_days
+});
+
+5.2 Backend — new POST /api/share/request/batch
+Iterate the recipients array and call ShareService.request_file_share() once per entry:
+
+@share_bp.route('/request/batch', methods=['POST'])
+@jwt_required()
+def batch_share_request():
+    data = request.get_json()
+    results = []
+    for entry in data['recipients']:
+        key_bytes = bytes.fromhex(entry['encrypted_aes_key'])
+        sr = ShareService.request_file_share(
+            owner_id=current_user.id,
+            file_id=data['file_id'],
+            recipient_username=entry['username'],
+            recipient_encrypted_aes_key=key_bytes,
+            can_download=data.get('can_download', True),
+            can_reshare=data.get('can_reshare', False),
+            expires_days=data.get('expires_days'),
+        )
+        results.append(sr.to_dict())
+    return jsonify({'success': True, 'shares': results})
+
+6. Group / Friends System Design
+
+6.1 Database Models
+Add two new tables to the models layer:
+
+class Friend(db.Model):
+    __tablename__ = 'friends'
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    friend_id  = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    status     = db.Column(db.String(20), default='pending')  # pending|accepted|blocked
+    created_at = db.Column(db.DateTime, default=_now)
+    __table_args__ = (db.UniqueConstraint('user_id', 'friend_id'),)
+
+class Group(db.Model):
+    __tablename__ = 'groups'
+    id         = db.Column(db.Integer, primary_key=True)
+    owner_id   = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name       = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, default=_now)
+
+class GroupMember(db.Model):
+    __tablename__ = 'group_members'
+    id         = db.Column(db.Integer, primary_key=True)
+    group_id   = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=False, index=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    joined_at  = db.Column(db.DateTime, default=_now)
+    __table_args__ = (db.UniqueConstraint('group_id', 'user_id'),)
+
+6.2 API Endpoints
+
+Endpoint	Purpose
+POST /api/friends/request	Send a friend request by username
+POST /api/friends/:id/accept	Accept an incoming request
+GET  /api/friends	List accepted friends (includes public_key for re-wrap)
+POST /api/groups	Create a group
+POST /api/groups/:id/members	Add member to group
+POST /api/share/group/:id	Batch-share file to all group members
+
+6.3 Group Share Flow
+Sharing to a group reuses the batch key-wrapping flow from Section 5:
+    17. Frontend fetches all group members with their public keys via GET /api/groups/:id/members
+    18. For each member, browser re-wraps the AES key using that member's public key
+    19. Frontend POSTs the wrapped array to POST /api/share/request/batch
+    20. Server calls ShareService.request_file_share() for each member independently
+
+This design guarantees that only group members with accepted share requests can ever decrypt the file.
+
+7. Secure File Access Flow — Verification
+
+The complete recipient download flow after fixes are applied:
+
+    21. Owner shares file  →  browser re-wraps AES key with recipient RSA public key  →  POST /share/request stores LargeBinary in share_requests.encrypted_aes_key
+    22. Recipient accepts share  →  SharedAccess record created (no key material moved)
+    23. Recipient clicks Download  →  browser POSTs to /otp/send (purpose: file_download)  →  OTP email sent
+    24. Recipient enters OTP  →  POST /otp/verify  →  server issues download_token (signed JWT claim)
+    25. GET /files/:id with X-Download-Token header  →  FileService validates token, detects SharedAccess, returns encrypted_file (hex) and encrypted_aes_key (hex from ShareRequest)
+    26. Browser calls decryptPrivateKeyPem(encrypted_private_key, password)  →  Argon2id+AES-GCM decrypts PEM in browser
+    27. Browser calls decryptFile(encryptedFileHex, encryptedAesKeyHex, privKeyPem)  →  RSA-OAEP unwraps AES key, AES-GCM decrypts file
+    28. triggerDownload() saves plaintext to user's machine — server never saw the plaintext
+
+8. Security Audit
+
+Component	Status	Notes
+Plaintext key never stored in DB	COMPLETE	AES key always RSA-wrapped before storage
+Private key never stored plaintext	COMPLETE	Argon2id+AES-GCM envelope; stored as salt:iv:ct:tag
+Server never sees raw AES key on share	COMPLETE	Re-wrapping happens entirely in browser
+OTP hash — no plaintext in DB	COMPLETE	SHA-256 hash only; otp_code_hash column
+OTP brute-force protection	COMPLETE	MAX_ATTEMPTS=3, expiry=10 min
+JWT token revocation on logout	COMPLETE	Redis blocklist via jwt.token_in_blocklist_loader
+Download requires OTP token	COMPLETE	X-Download-Token validated by FileService
+Filename sanitisation	COMPLETE	secure_filename() before any storage
+Error messages hide internals	COMPLETE	Generic messages + correlation IDs only
+GET /user/me/private-key exposure	PARTIAL	Endpoint returns encrypted envelope — acceptable only if HTTPS enforced and JWT validated. Recommend rate-limit this endpoint (e.g. 5/min).
+GET /user/public-key/:username	PARTIAL	Leaks username existence; acceptable for sharing but document as design decision. Consider auth requirement.
+Client-side AES key in memory	PARTIAL	Raw key exists briefly in WebCrypto operation; JS GC provides no zeroing guarantee. clearSensitiveMemory() clears password inputs only. Acceptable for demo; for production use SubtleCrypto wrapKey/unwrapKey to keep key inside WebCrypto opaque objects.
+HTTPS in demo mode	PARTIAL	Spec states localhost cert; ensure HSTS and no mixed content before any non-local deployment
+
+8.1 Recommended Additional Hardening
+    • Rate-limit GET /user/me/private-key to 5 requests/minute per JWT identity
+    • Rate-limit GET /user/public-key/:username to 20/minute to slow enumeration
+    • Add OTP log entries for failed share attempts (currently only generate/verify/resend logged)
+    • Use SubtleCrypto wrapKey/unwrapKey instead of decrypt+encrypt in rewrapAesKey to prevent raw AES key ever appearing as an ArrayBuffer — the most robust approach for production
+    • Persist share expiry check in file_service.get_file_for_download() — currently ShareRequest.expires_at is stored but not checked at download time
+
+9. Code Modification Summary
+
+9.1 Files to Modify
+
+File	Change Required
+src/routes/files.py	Add GET /<int:file_id>/key endpoint (Section 4.1.1)
+src/routes/user.py	Add GET /me/private-key and GET /public-key/<username> (Section 4.1.2, 4.1.3)
+src/routes/share.py	Parse hex recipient_encrypted_aes_key, add POST /request/batch (Section 4.2, 5.2)
+frontend/js/files.js	Uncomment and complete client-side decryptFile call + add triggerDownload() (Section 4.3)
+
+9.2 New Files to Add
+
+File	Purpose
+src/models/friend.py	Friend and Group/GroupMember models (Section 6.1)
+src/routes/friends.py	Friend request CRUD endpoints (Section 6.2)
+src/routes/groups.py	Group management + group-share endpoint (Section 6.2)
+
+9.3 Files That Need No Changes
+
+    • crypto.js — fully implemented and correct
+    • sharing.js — fully implemented and correct; will work once the 3 endpoints exist
+    • share_service.py — already stores recipient_encrypted_aes_key correctly
+    • file_service.py — already serves recipient-wrapped key on download
+    • encryption_service.py — already has rewrap_aes_key() server-side fallback
+    • otp_service.py — complete; no changes needed
+    • user.py, file.py, share.py, otp.py models — complete
+
+10. API Contract Changes
+
+10.1 New Endpoints
+
+Property	GET /api/files/:id/key
+Auth	JWT required
+Access control	Owner only
+Response 200	{ success: true, encrypted_aes_key: string (hex) }
+Response 404	{ success: false, error: 'File not found' }
+
+Property	GET /api/user/me/private-key
+Auth	JWT required
+Access control	Self only (resolved from JWT)
+Response 200	{ success: true, encrypted_private_key: string (salt:iv:ct:tag) }
+Response 404	{ success: false, error: 'User not found' }
+
+Property	GET /api/user/public-key/:username
+Auth	JWT required
+Access control	Any authenticated user
+Response 200	{ success: true, public_key: string (PEM) }
+Response 404	{ success: false, error: 'User not found' }
+
+10.2 Modified Endpoint
+
+Property	POST /api/share/request  (modified)
+New required field	recipient_encrypted_aes_key  (hex string)
+Validation	Server validates hex encoding; rejects if absent or non-hex
+Storage	bytes.fromhex(hex) stored in share_requests.encrypted_aes_key (LargeBinary)
+
+11. Implementation Priority
+
+The following order minimises risk and allows incremental testing:
+
+    29. Add the three missing endpoints (4.1.1, 4.1.2, 4.1.3) — zero risk, pure additions
+    30. Fix hex decode in POST /share/request (4.2) — small targeted change
+    31. Complete files.js client-side decryption (4.3) — enables full E2E test
+    32. Test end-to-end: upload → share → accept → download → verify plaintext
+    33. Add batch share endpoint (5.2) + frontend (5.1)
+    34. Add Friend and Group models + routes (6)
+    35. Apply security hardening from Section 8.1
+
+After steps 1–4 the original error will be resolved and the complete key re-wrapping pipeline will function end-to-end with no server-side plaintext key exposure.
+

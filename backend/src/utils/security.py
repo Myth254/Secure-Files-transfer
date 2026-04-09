@@ -92,18 +92,44 @@ class SecurityUtils:
         return safe
 
     @staticmethod
-    def validate_path_traversal(path: str) -> bool:
+    def validate_path_traversal(path: str, base_dir: str = '') -> bool:
         """
-        Return True if *path* contains no traversal sequences.
+        Return True if *path* resolves to a location inside *base_dir*.
 
-        Note: prefer werkzeug.utils.safe_join() over manual checks wherever
-        filesystem paths are constructed.
+        The check is performed by resolving both paths to their absolute real
+        paths and verifying that the candidate stays within the base directory.
+        This is the only safe approach — string-level ``..`` checks can be
+        bypassed by URL-encoding, backslashes, or symlinks.
+
+        Args:
+            path:     Candidate path (relative or absolute).
+            base_dir: Trusted base directory.  Defaults to the process CWD.
+                      Pass ``current_app.config['UPLOAD_FOLDER']`` at call
+                      sites that deal with uploaded files.
+
+        Returns:
+            True  — path is safely inside base_dir.
+            False — path is empty, escapes base_dir, or is suspicious.
+
+        Note:
+            Prefer ``werkzeug.utils.safe_join()`` for constructing filesystem
+            paths from user input; call this helper only when you need to
+            validate a pre-existing path string.
         """
-        normalised = os.path.normpath(path)
-        for pattern in ('..', '~', '//', '\\\\'):
-            if pattern in normalised:
-                return False
-        return True
+        if not path:
+            return False
+
+        # Resolve the base directory once (default to CWD if not supplied)
+        resolved_base = os.path.realpath(base_dir or os.getcwd())
+
+        # Build the candidate absolute path and resolve symlinks / .. components
+        candidate = os.path.realpath(os.path.join(resolved_base, path))
+
+        # The candidate must be equal to OR a strict sub-path of the base dir.
+        # os.path.realpath guarantees no trailing separator on the base string,
+        # so we append os.sep to avoid a partial-directory prefix match
+        # (e.g. /uploads-evil starting with /uploads).
+        return candidate == resolved_base or candidate.startswith(resolved_base + os.sep)
 
     # ── Client IP ─────────────────────────────────────────────────────────
 
@@ -259,7 +285,7 @@ class SecurityUtils:
         expires_at = int(time.time()) + ttl_seconds
         payload    = f"{user_id}:{file_id}:{expires_at}"
         secret     = current_app.config['SECRET_KEY'].encode('utf-8')
-        sig        = hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+        sig        = hmac.HMAC(secret, payload.encode('utf-8'), hashlib.sha256).hexdigest()
         raw        = f"{payload}:{sig}"
         return base64.urlsafe_b64encode(raw.encode()).decode()
 
@@ -286,7 +312,7 @@ class SecurityUtils:
             tok_uid, tok_fid, tok_exp, tok_sig = parts
             payload = f"{tok_uid}:{tok_fid}:{tok_exp}"
             secret  = current_app.config['SECRET_KEY'].encode('utf-8')
-            expected_sig = hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+            expected_sig = hmac.HMAC(secret, payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
             # Constant-time comparison
             if not hmac.compare_digest(tok_sig, expected_sig):

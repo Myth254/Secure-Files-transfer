@@ -27,7 +27,7 @@ from flask_jwt_extended import (
     create_access_token, jwt_required, get_jwt_identity, get_jwt,
 )
 
-from src.extensions import db
+from src.extensions import db, socketio
 from src.models.user import User
 from src.models.log import Log
 from src.services.auth_service import AuthService
@@ -55,12 +55,26 @@ def _log(user_id, action: str, details: str) -> None:
 
 
 def _redis_client():
+    """
+    Return the shared Redis client created in app.py at startup.
+
+    app.py stores it as ``current_app.extensions['redis_client']`` so that
+    all blueprints reuse the same connection pool instead of each creating
+    their own (L-04).
+    """
     from flask import current_app
-    import redis
-    return redis.from_url(
-        current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
-        decode_responses=True,
-    )
+    import redis as _redis
+
+    client = current_app.extensions.get('redis_client')
+    if client is None:
+        # Fallback: create once and cache — only hit on first request if
+        # app.py did not pre-register the client (e.g. in tests).
+        client = _redis.from_url(
+            current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
+            decode_responses=True,
+        )
+        current_app.extensions['redis_client'] = client
+    return client
 
 
 # ── register ──────────────────────────────────────────────────────────────────
@@ -93,6 +107,11 @@ def register():
         db.session.commit()
 
         logger.info(f"Registered: {username} (id={user.id})")
+        socketio.emit('user_registered', {
+            'user_id':   user.id,
+            'username':  user.username,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }, namespace='/monitoring')
 
         return jsonify({
             'success': True,
@@ -134,14 +153,14 @@ def login():
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
 
-        username = data.get('username', '').strip()
+        email = data.get('email', '').strip().lower()
         password = data.get('password', '')
 
-        if not username or not password:
-            return jsonify({'success': False, 'error': 'Username and password required'}), 400
+        if not email or not password:
+            return jsonify({'success': False, 'error': 'Email and password required'}), 400
 
         # Raises AuthenticationError on failure (generic message prevents enumeration)
-        user = AuthService.authenticate_user(username, password)
+        user = AuthService.authenticate_user_by_email(email, password)
 
         otp_result = OTPService.send_otp(
             user_id=user.id,
@@ -154,7 +173,7 @@ def login():
         if not otp_result['success']:
             return jsonify({'success': False, 'error': 'Failed to send OTP'}), 500
 
-        logger.info(f"OTP dispatched for user={username}")
+        logger.info(f"OTP dispatched for email={email}")
         return jsonify({
             'success':      True,
             'message':      'Password verified. OTP sent to your email.',
@@ -166,7 +185,7 @@ def login():
 
     except AuthenticationError as ae:
         # Log failed attempt (no user_id available — that's intentional)
-        _log(None, 'login_failed', f'Failed login: {data.get("username", "") if data else ""}') # type: ignore
+        _log(None, 'login_failed', f'Failed login for email: {data.get("email", "") if data else ""}') # type: ignore
         try:
             db.session.commit()
         except Exception:
@@ -199,8 +218,8 @@ def verify_login_otp():
         if not otp_id or not otp_code:
             return jsonify({'success': False, 'error': 'otp_id and otp_code are required'}), 400
 
-        # verify_otp resolves user_id from the DB record internally
-        verify_result = OTPService.verify_otp(otp_id, otp_code, request)  # type: ignore
+        # Resolve user ownership from the server-side OTP record.
+        verify_result = OTPService.verify_otp_for_login(otp_id, otp_code, request)
 
         if not verify_result['success']:
             return jsonify({'success': False, 'error': 'OTP verification failed'}), 401
@@ -214,6 +233,12 @@ def verify_login_otp():
         db.session.commit()
 
         logger.info(f"Login complete: {user.username} (id={user.id})")
+        socketio.emit('user_login', {
+            'user_id':   user.id,
+            'username':  user.username,
+            'ip':        request.remote_addr,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }, namespace='/monitoring')
         return jsonify({
             'success': True,
             'message': 'Login successful',
@@ -241,7 +266,7 @@ def resend_login_otp():
         if not otp_id:
             return jsonify({'success': False, 'error': 'otp_id is required'}), 400
 
-        result = OTPService.resend_otp(otp_id=otp_id, request=request)
+        result = OTPService.resend_otp_by_id(otp_id=otp_id, request=request)
 
         if result['success']:
             return jsonify({
@@ -282,6 +307,10 @@ def logout():
 
         _log(user_id, 'logout', 'User logged out')
         db.session.commit()
+        socketio.emit('user_logout', {
+            'user_id':   user_id,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }, namespace='/monitoring')
 
         return jsonify({'success': True, 'message': 'Logout successful'}), 200
 

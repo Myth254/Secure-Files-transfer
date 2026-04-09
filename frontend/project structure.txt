@@ -1,3 +1,104 @@
+The_Lock/  (Secure File Transfer Platform)
+│
+├── backend/                           — Flask API server + services
+│   ├── app.py                         — Flask app initialization, route registration
+│   ├── config.py                      — Configuration for dev/prod environments
+│   ├── requirements.txt                — Python dependencies
+│   │
+│   ├── src/
+│   │   ├── __init__.py
+│   │   ├── extensions.py              — Flask extensions (db, jwt, socketio, limiter)
+│   │   │
+│   │   ├── models/                    — SQLAlchemy ORM models
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py                — User (username, email, RSA keys, password hash)
+│   │   │   ├── file.py                — File (encrypted_file, aes_key, owner_id)
+│   │   │   ├── log.py                 — Log (user actions, IP, user-agent)
+│   │   │   ├── monitoring.py          — Monitoring (metrics, alerts, thresholds)
+│   │   │   ├── otp.py                 — OTPCode (one-time codes for login/registration)
+│   │   │   └── share.py               — ShareRequest, SharedAccess, ShareLog
+│   │   │
+│   │   ├── routes/                    — Flask blueprints (REST endpoints)
+│   │   │   ├── __init__.py
+│   │   │   ├── auth.py                — /api/auth/* (login, register, verify, logout)
+│   │   │   ├── files.py               — /api/files/* (upload, download, delete)
+│   │   │   ├── user.py                — /api/user/* (profile, public key, password)
+│   │   │   ├── share.py               — /api/share/* (request, accept, reject, revoke)
+│   │   │   ├── otp.py                 — /api/otp/* (send code, verify)
+│   │   │   └── monitoring.py          — /api/monitoring/* (metrics, alerts, rules)
+│   │   │
+│   │   ├── services/                  — Business logic & operations
+│   │   │   ├── __init__.py
+│   │   │   ├── auth_service.py        — User registration, authentication, password mgmt
+│   │   │   ├── file_service.py        — Upload, download, encryption, access control
+│   │   │   ├── share_service.py       — Share request workflow, access management
+│   │   │   ├── otp_service.py         — OTP generation, verification, expiry
+│   │   │   ├── email_service.py       — Email sending for OTP + notifications
+│   │   │   └── encryption_service.py  — AES-256-GCM, RSA-2048-OAEP, key wrapping
+│   │   │
+│   │   ├── utils/                     — Utilities & helpers
+│   │   │   ├── __init__.py
+│   │   │   ├── exceptions.py          — Custom exceptions (ValidationError, AuthError)
+│   │   │   ├── responses.py           — Standard response formatting
+│   │   │   ├── security.py            — JWT helpers, rate limiting, CORS
+│   │   │   └── validators.py          — Input validation (email, username, password)
+│   │   │
+│   │   ├── monitoring/                — Real-time metrics & alerts
+│   │   │   ├── __init__.py
+│   │   │   ├── metrics.py             — System metrics collection
+│   │   │   ├── alerts.py              — Alert logic & notifications
+│   │   │   ├── middleware.py          — Request timing & monitoring
+│   │   │   └── socket_events.py       — WebSocket event handlers
+│   │   │
+│   │   └── tests/                     — Test suite
+│   │       ├── conftest.py            — Pytest fixtures
+│   │       ├── test_auth.py           — Auth endpoint tests
+│   │       └── test_files.py          — File operation tests
+│   │
+│   ├── scripts/
+│   │   └── init_monitoring.py         — Initialize monitoring dashboard
+│   │
+│   └── test_*.py files                — Integration & functionality tests
+│
+├── frontend/                          — Vue-like vanilla JS SPA
+│   ├── index.html                     — Main shell + script loaders
+│   ├── js/
+│   │   ├── app.js                     — Entry point, calls init()
+│   │   ├── loader.js                  — Loads HTML partials asynchronously
+│   │   ├── api.js                     — API config, state, fetch helpers
+│   │   ├── ui.js                      — UI utilities (toasts, modals, router)
+│   │   ├── auth.js                    — Login, OTP, register, logout
+│   │   ├── files.js                   — Upload, download, delete, search
+│   │   ├── sharing.js                 — Share flow, accept/reject/revoke
+│   │   ├── profile.js                 — Profile update, activity log
+│   │   ├── monitoring.js              — Metrics, alerts, polling
+│   │   └── crypto.js                  — Client-side encryption/decryption
+│   ├── html/                          — Page partials
+│   │   ├── login.html
+│   │   ├── register.html
+│   │   ├── otp.html
+│   │   ├── key-backup.html
+│   │   ├── sidebar.html
+│   │   ├── page-files.html
+│   │   ├── page-sharing.html
+│   │   ├── page-monitoring.html
+│   │   ├── page-profile.html
+│   │   └── modals.html
+│   └── css/
+│       ├── tokens.css                 — Design tokens (colors, spacing, typography)
+│       ├── base.css                   — Reset, keyframes, utilities
+│       ├── layout.css                 — Page layouts, grids
+│       ├── components.css             — Buttons, forms, tables, badges
+│       └── pages.css                  — Page-specific styles
+│
+└── README.md                          — Project documentation
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+FRONTEND STRUCTURE (Detailed)
+═══════════════════════════════════════════════════════════════════════════════
+
 vaultsync/
 ├── index.html           — pure HTML structure, zero JS/CSS
 ├── html/

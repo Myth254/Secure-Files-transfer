@@ -201,6 +201,13 @@
 .file-meta .sep { color: var(--border-mid); }
 
 .file-actions { display: flex; gap: 0.375rem; flex-shrink: 0; }
+.file-actions .btn { white-space: nowrap; }
+
+.stat-note {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
 
 /* Encryption badge in topbar */
 .enc-badge {
@@ -258,6 +265,121 @@
 .perm-row:last-child { border-bottom: none; }
 .perm-label { font-size: 0.875rem; color: var(--text-secondary); }
 .perm-desc  { font-size: 0.75rem; color: var(--text-muted); }
+
+/* File viewer */
+.file-viewer-modal {
+  max-width: min(980px, calc(100vw - 2rem));
+}
+
+.viewer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  align-items: center;
+}
+
+.viewer-meta .sep {
+  color: var(--border-mid);
+}
+
+.viewer-alert {
+  margin: 0;
+}
+
+.viewer-surface {
+  min-height: 360px;
+  max-height: 70vh;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: rgba(3, 9, 15, 0.35);
+  padding: 1rem;
+}
+
+.viewer-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.viewer-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border-radius: var(--radius-md);
+}
+
+.viewer-frame {
+  width: 100%;
+  min-height: 62vh;
+  border: none;
+  border-radius: var(--radius-md);
+  background: white;
+}
+
+.viewer-richtext {
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.viewer-richtext h1,
+.viewer-richtext h2,
+.viewer-richtext h3,
+.viewer-richtext h4,
+.viewer-richtext h5,
+.viewer-richtext h6 {
+  color: var(--text-primary);
+  margin: 1rem 0 0.5rem;
+}
+
+.viewer-richtext p,
+.viewer-richtext ul {
+  margin: 0 0 0.875rem;
+}
+
+.viewer-sheets {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.viewer-sheet-title {
+  font-size: 0.8125rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.viewer-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: rgba(9, 18, 31, 0.7);
+}
+
+.viewer-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.viewer-table th,
+.viewer-table td,
+.viewer-table-wrap table th,
+.viewer-table-wrap table td {
+  border: 1px solid var(--border-subtle);
+  padding: 0.5rem 0.625rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  text-align: left;
+}
 
 /* ════════════════════════════════════════
    MONITORING PAGE

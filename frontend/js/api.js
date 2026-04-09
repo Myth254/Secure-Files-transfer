@@ -15,23 +15,28 @@ const API_BASE = 'http://localhost:5000/api';
 ════════════════════════════════════════ */
 const state = {
   // Auth
-  token:   localStorage.getItem('vaultsync_token'),
-  user:    null,
+  token:               localStorage.getItem('vaultsync_token'),
+  user:                null,
+  encryptedPrivateKey: localStorage.getItem('vaultsync_enc_key') || null,
 
   // Files
   files:         [],
   filteredFiles: [],
+  sharedFiles:   [],
   currentPage:   1,
   perPage:       10,
   totalPages:    1,
 
   // Pending flows
-  pendingOTP:      null,  // { otp_id, user_id, email, username, expires_in }
-  pendingRegister: null,  // private key PEM string after registration
+  pendingOTP:      null,  // { otp_id, email, expires_in }
+  pendingRegister: null,  // encrypted private key string after registration
+  downloadOTP:     null,  // { otp_id, expires_in, message }
+  fileActionMode:  'download', // 'view' | 'download'
 
   // Modal targets
-  deleteTarget:   null,   // file id
-  downloadTarget: null,   // file id
+  deleteTarget:         null,      // file id
+  downloadTarget:       null,      // file id
+  downloadTargetSource: 'owned',   // 'owned' | 'shared'
 
   // Polling
   metricsInterval: null,
@@ -49,8 +54,8 @@ const state = {
  * @param {boolean} noAuth - Skip Authorization header
  * @returns {{ ok: boolean, status: number, data: object }}
  */
-async function api(method, path, body = null, noAuth = false) {
-  const headers = { 'Content-Type': 'application/json' };
+async function api(method, path, body = null, noAuth = false, extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
   if (!noAuth && state.token) {
     headers['Authorization'] = `Bearer ${state.token}`;
   }

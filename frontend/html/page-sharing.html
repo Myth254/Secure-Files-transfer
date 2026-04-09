@@ -16,20 +16,33 @@
 
   <!-- Tabs -->
   <div class="tabs">
-    <div class="tab active" id="tabReceived"
-      onclick="switchShareTab('received')">Received Requests</div>
+    <div class="tab active" id="tabAccessible"
+      onclick="switchShareTab('accessible')">Accessible Files</div>
+    <div class="tab" id="tabReceived"
+      onclick="switchShareTab('received')">Pending Requests</div>
     <div class="tab" id="tabSent"
       onclick="switchShareTab('sent')">Sent by Me</div>
-    <div class="tab" id="tabAccessible"
-      onclick="switchShareTab('accessible')">Accessible Files</div>
+  </div>
+
+  <!-- Tab: Accessible -->
+  <div id="shareTabAccessible">
+    <div id="accessibleFilesContainer">
+      <div class="table-empty">
+        <div class="table-empty-icon">🔓</div>
+        <div class="table-empty-text">No accessible files</div>
+        <div class="table-empty-sub text-muted">
+          Files shared with you will appear here
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Tab: Received -->
-  <div id="shareTabReceived">
+  <div id="shareTabReceived" class="hidden">
     <div id="receivedSharesContainer">
       <div class="table-empty">
         <div class="table-empty-icon">📨</div>
-        <div class="table-empty-text">No incoming share requests</div>
+        <div class="table-empty-text">No pending share requests</div>
         <div class="table-empty-sub text-muted">
           Requests from other users will appear here
         </div>
@@ -50,40 +63,37 @@
     </div>
   </div>
 
-  <!-- Tab: Accessible -->
-  <div id="shareTabAccessible" class="hidden">
-    <div id="accessibleFilesContainer">
-      <div class="table-empty">
-        <div class="table-empty-icon">🔓</div>
-        <div class="table-empty-text">No accessible files</div>
-        <div class="table-empty-sub text-muted">
-          Files shared with you will appear here
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- Share stats -->
-  <div class="stat-grid mt-4" style="grid-template-columns:repeat(4,1fr)">
+  <div class="stat-grid mt-4" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
     <div class="stat-card">
       <div class="stat-icon blue">📤</div>
       <div class="stat-value" id="statSharesSent">—</div>
       <div class="stat-label">Shares Sent</div>
+      <div class="stat-note" id="statSharesSentDetail">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon amber">📨</div>
+      <div class="stat-value" id="statPendingRequests">—</div>
+      <div class="stat-label">Pending Requests</div>
+      <div class="stat-note" id="statPendingRequestsDetail">—</div>
     </div>
     <div class="stat-card">
       <div class="stat-icon green">✓</div>
       <div class="stat-value" id="statSharesAccepted">—</div>
-      <div class="stat-label">Accepted</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-icon amber">📨</div>
-      <div class="stat-value" id="statSharesReceived">—</div>
-      <div class="stat-label">Received</div>
+      <div class="stat-label">Accepted Shares</div>
+      <div class="stat-note" id="statSharesAcceptedDetail">—</div>
     </div>
     <div class="stat-card">
       <div class="stat-icon blue">🔓</div>
       <div class="stat-value" id="statFilesAccessible">—</div>
       <div class="stat-label">Accessible</div>
+      <div class="stat-note" id="statFilesAccessibleDetail">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon red">⛔</div>
+      <div class="stat-value" id="statClosedShares">—</div>
+      <div class="stat-label">Rejected / Revoked</div>
+      <div class="stat-note" id="statClosedSharesDetail">—</div>
     </div>
   </div>
 
