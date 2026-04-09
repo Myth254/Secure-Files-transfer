@@ -226,8 +226,59 @@ function getFileIconClass(filename) {
 }
 
 /* ════════════════════════════════════════
-   VIEW / PAGE ROUTER
+   THEME TOGGLE (light / dark)
 ════════════════════════════════════════ */
+
+const THEME_STORAGE_KEY = 'vaultsync-theme';
+
+/**
+ * Toggle between light and dark mode.
+ * Persists preference to localStorage and updates the toggle button icon.
+ */
+function toggleTheme() {
+  const html    = document.documentElement;
+  const current = html.getAttribute('data-theme') || 'dark';
+  const next    = current === 'dark' ? 'light' : 'dark';
+
+  html.setAttribute('data-theme', next);
+  localStorage.setItem(THEME_STORAGE_KEY, next);
+  _updateThemeBtn(next);
+}
+
+/**
+ * Read saved preference (or system preference) and apply on load.
+ * Called once after partials are ready so the button exists in DOM.
+ */
+function initTheme() {
+  const saved       = localStorage.getItem(THEME_STORAGE_KEY);
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const theme       = saved || (prefersDark ? 'dark' : 'light');
+
+  document.documentElement.setAttribute('data-theme', theme);
+  _updateThemeBtn(theme);
+
+  // Keep in sync if the OS preference changes while the tab is open
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+    if (!localStorage.getItem(THEME_STORAGE_KEY)) {
+      const t = e.matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+      _updateThemeBtn(t);
+    }
+  });
+}
+
+/**
+ * Update the toggle button icon to reflect the current theme.
+ * @param {'dark'|'light'} theme
+ */
+function _updateThemeBtn(theme) {
+  const btn = document.getElementById('themeToggleBtn');
+  if (!btn) return;
+  btn.textContent = theme === 'dark' ? '🌙' : '☀️';
+  btn.title       = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+}
+
+
 const ALL_VIEWS = ['viewLogin', 'viewRegister', 'viewKeyBackup', 'viewOTP', 'viewDashboard'];
 
 /**

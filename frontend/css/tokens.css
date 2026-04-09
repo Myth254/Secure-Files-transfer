@@ -92,3 +92,323 @@
   --glow-accent:     0 0 24px rgba(58, 110, 196, 0.30);
   --glow-success:    0 0 20px rgba(16, 185, 129, 0.25);
 }
+
+/* ═══════════════════════════════════════════════════════
+   LIGHT MODE OVERRIDES
+   Applied via [data-theme="light"] on <html>
+═══════════════════════════════════════════════════════ */
+[data-theme="light"] {
+  /* ── Surface hierarchy (light) ── */
+  --bg-primary:   #f0f4fa;
+  --bg-surface:   #ffffff;
+  --bg-card:      #f8fafc;
+  --bg-elevated:  #eef3fb;
+
+  /* ── Navy scale remapped for light ── */
+  --navy-950: #e8eef8;
+  --navy-900: #dde6f4;
+  --navy-850: #d0dcee;
+  --navy-800: #c0d0e8;
+  --navy-750: #a8bfdb;
+  --navy-700: #8aadd0;
+  --navy-600: #2f6ab5;
+  --navy-500: #1e559e;
+  --navy-400: #1a4a8a;
+  --navy-300: #163d74;
+  --navy-200: #12315e;
+  --navy-100: #0e264a;
+  --navy-50:  #091b38;
+
+  /* ── Borders (light) ── */
+  --border-subtle: rgba(30, 85, 158, 0.14);
+  --border-mid:    rgba(30, 85, 158, 0.28);
+  --border-strong: rgba(30, 85, 158, 0.50);
+
+  /* ── Text (light) ── */
+  --text-primary:   #0e1e38;
+  --text-secondary: #2f4a6e;
+  --text-muted:     #6b84a3;
+
+  /* ── Semantic (light) ── */
+  --accent:       #2f6ab5;
+  --accent-glow:  rgba(30, 85, 158, 0.18);
+  --success:      #059669;
+  --success-glow: rgba(5, 150, 105, 0.15);
+  --danger:       #dc2626;
+  --danger-glow:  rgba(220, 38, 38, 0.15);
+
+  /* ── Shadows (light) ── */
+  --shadow-card:     0 1px 3px rgba(0,0,30,0.08), 0 4px 16px rgba(0,0,30,0.07);
+  --shadow-elevated: 0 4px 24px rgba(0,0,30,0.12), 0 1px 4px rgba(0,0,30,0.06);
+  --glow-accent:     0 0 24px rgba(30, 85, 158, 0.18);
+  --glow-success:    0 0 20px rgba(5, 150, 105, 0.15);
+}
+
+/* ─── Light-specific component overrides ─── */
+
+/* Grid background texture (lighter) */
+[data-theme="light"] body::before {
+  background-image:
+    linear-gradient(rgba(30, 85, 158, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 85, 158, 0.05) 1px, transparent 1px);
+}
+
+/* Auth card ambient glow */
+[data-theme="light"] .auth-layout::after {
+  background: radial-gradient(ellipse at center, rgba(47, 106, 181, 0.12) 0%, transparent 70%);
+}
+
+/* Auth card gradient line */
+[data-theme="light"] .auth-card::before {
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+
+/* Sidebar */
+[data-theme="light"] .sidebar {
+  background: var(--bg-surface);
+  border-right-color: var(--border-subtle);
+  box-shadow: 2px 0 12px rgba(0,0,30,0.06);
+}
+
+/* Topbar */
+[data-theme="light"] .topbar {
+  background: var(--bg-surface);
+  border-bottom-color: var(--border-subtle);
+  box-shadow: 0 1px 8px rgba(0,0,30,0.06);
+}
+
+/* Nav active state */
+[data-theme="light"] .nav-item.active {
+  background: rgba(47, 106, 181, 0.12);
+  border-color: var(--border-mid);
+  color: var(--navy-300);
+  box-shadow: 0 1px 8px rgba(47, 106, 181, 0.10);
+}
+
+[data-theme="light"] .nav-item:hover {
+  background: rgba(47, 106, 181, 0.07);
+}
+
+/* Form inputs */
+[data-theme="light"] .form-input {
+  background: #ffffff;
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .form-input:focus {
+  background: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 106, 181, 0.12);
+}
+
+[data-theme="light"] .form-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Buttons */
+[data-theme="light"] .btn-primary {
+  background: var(--accent);
+  border-color: #1e559e;
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(30,85,158,0.25), inset 0 1px 0 rgba(255,255,255,0.15);
+}
+
+[data-theme="light"] .btn-primary:hover:not(:disabled) {
+  background: #1e559e;
+  box-shadow: 0 2px 12px rgba(30,85,158,0.30);
+}
+
+[data-theme="light"] .btn-secondary {
+  background: var(--bg-surface);
+  border-color: var(--border-mid);
+  color: var(--text-secondary);
+}
+
+[data-theme="light"] .btn-secondary:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .btn-ghost:hover:not(:disabled) {
+  background: rgba(0,0,0,0.05);
+  color: var(--text-primary);
+}
+
+/* Toast */
+[data-theme="light"] .toast {
+  background: #ffffff;
+  border-color: var(--border-mid);
+  box-shadow: 0 4px 24px rgba(0,0,30,0.14);
+}
+
+[data-theme="light"] .toast-title   { color: var(--text-primary); }
+[data-theme="light"] .toast-message { color: var(--text-secondary); }
+
+/* Modal */
+[data-theme="light"] .modal-overlay {
+  background: rgba(10,20,50,0.55);
+}
+
+[data-theme="light"] .modal {
+  background: var(--bg-surface);
+  border-color: var(--border-mid);
+  box-shadow: 0 8px 40px rgba(0,0,30,0.18);
+}
+
+/* Stat & metric cards */
+[data-theme="light"] .stat-card,
+[data-theme="light"] .metric-card {
+  background: #ffffff;
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-card);
+}
+
+/* Table */
+[data-theme="light"] thead {
+  background: var(--bg-elevated);
+}
+
+[data-theme="light"] tbody tr:hover {
+  background: rgba(47, 106, 181, 0.04);
+}
+
+/* File item */
+[data-theme="light"] .file-item {
+  background: #ffffff;
+  border-color: var(--border-subtle);
+}
+
+[data-theme="light"] .file-item:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-mid);
+}
+
+/* Enc badge */
+[data-theme="light"] .enc-badge {
+  background: rgba(5, 150, 105, 0.08);
+  border-color: rgba(5, 150, 105, 0.25);
+  color: #059669;
+}
+
+/* Upload zone */
+[data-theme="light"] .upload-zone {
+  background: rgba(47, 106, 181, 0.03);
+  border-color: var(--border-mid);
+}
+
+[data-theme="light"] .upload-zone:hover,
+[data-theme="light"] .upload-zone.drag-over {
+  background: rgba(47, 106, 181, 0.07);
+  border-color: var(--accent);
+}
+
+/* Scrollbar */
+[data-theme="light"] ::-webkit-scrollbar-track { background: #e8eef8; }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: #a8bfdb; }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: #8aadd0; }
+
+/* Skeleton */
+[data-theme="light"] .skeleton {
+  background: linear-gradient(90deg, #dde6f4 25%, #c8d8ec 50%, #dde6f4 75%);
+  background-size: 200% 100%;
+}
+
+/* Key backup */
+[data-theme="light"] .key-backup {
+  background: #fffbf0;
+  border-color: rgba(217, 119, 6, 0.35);
+}
+
+[data-theme="light"] .key-display {
+  background: #f8f9fc;
+  border-color: var(--border-subtle);
+  color: #059669;
+}
+
+/* OTP input */
+[data-theme="light"] .otp-input {
+  background: #ffffff;
+  border-color: var(--border-mid);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .otp-input:focus {
+  border-color: var(--accent);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(47, 106, 181, 0.12);
+}
+
+/* Security info block */
+[data-theme="light"] .security-info {
+  background: rgba(5, 150, 105, 0.04);
+  border-color: rgba(5, 150, 105, 0.2);
+}
+
+/* Viewer surface */
+[data-theme="light"] .viewer-surface {
+  background: #f8fafc;
+  border-color: var(--border-subtle);
+}
+
+[data-theme="light"] .viewer-text {
+  color: var(--text-primary);
+}
+
+/* Share request card */
+[data-theme="light"] .share-request-card {
+  background: #ffffff;
+  border-color: var(--border-subtle);
+}
+
+/* Progress bar bg */
+[data-theme="light"] .progress-bar { background: var(--bg-elevated); }
+
+/* Toggle slider */
+[data-theme="light"] .toggle-slider {
+  background: #dde6f4;
+  border-color: var(--border-mid);
+}
+
+/* User pill */
+[data-theme="light"] .user-pill {
+  background: var(--bg-elevated);
+}
+
+[data-theme="light"] .user-pill:hover {
+  background: #dde6f4;
+}
+
+/* Nav badge */
+[data-theme="light"] .nav-badge {
+  background: rgba(47, 106, 181, 0.15);
+  color: var(--navy-300);
+}
+
+/* Theme toggle button */
+.theme-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.theme-toggle-btn:hover {
+  background: rgba(58, 110, 196, 0.08);
+  border-color: var(--border-mid);
+  color: var(--text-primary);
+  transform: rotate(15deg);
+}
+
+[data-theme="light"] .theme-toggle-btn:hover {
+  background: rgba(47, 106, 181, 0.08);
+}
