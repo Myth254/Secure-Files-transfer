@@ -508,8 +508,40 @@ function triggerDownload(uint8array, filename, mimeType = 'application/octet-str
  */
 function openDeleteModal(fileId, filename) {
   state.deleteTarget = fileId;
+  state.deleteOTP = null;
   document.getElementById('deleteFileName').textContent = filename;
+  document.getElementById('deleteOtpCode').value = '';
+  document.getElementById('deleteOtpGroup').classList.add('hidden');
+  document.getElementById('deleteStepText').textContent =
+    'An OTP will be sent to your email to confirm this deletion.';
+  document.getElementById('deleteOtpHint').textContent =
+    'Enter the code we sent to your email.';
+  document.getElementById('deleteAlert').classList.add('hidden');
+  setDeleteButtonLabel('🗑 Delete Permanently');
   openModal('deleteModal');
+}
+
+function closeDeleteModal() {
+  state.deleteTarget = null;
+  state.deleteOTP = null;
+  document.getElementById('deleteOtpCode').value = '';
+  document.getElementById('deleteOtpGroup').classList.add('hidden');
+  document.getElementById('deleteAlert').classList.add('hidden');
+  setDeleteButtonLabel('🗑 Delete Permanently');
+  closeModal('deleteModal');
+}
+
+function setDeleteButtonLabel(label) {
+  const btn = document.getElementById('deleteBtn');
+  if (!btn) return;
+  btn.innerHTML = label;
+  btn.dataset.origText = label;
+}
+
+function showDeleteAlert(message) {
+  const alertEl = document.getElementById('deleteAlert');
+  alertEl.textContent = message;
+  alertEl.className = 'alert alert-error';
 }
 
 /**
@@ -518,38 +550,64 @@ function openDeleteModal(fileId, filename) {
 async function confirmDelete() {
   if (!state.deleteTarget) return;
   const fileId = state.deleteTarget;
+  const otpCode = document.getElementById('deleteOtpCode').value.trim();
 
   try {
-    // Step 1: Request delete OTP
-    const otpReq = await api('POST', '/otp/send', {
-      purpose: 'delete_file',
-      file_id: fileId,
-    });
+    document.getElementById('deleteAlert').classList.add('hidden');
 
-    if (!otpReq.ok || !otpReq.data.success) {
-      toast('error', 'Delete failed', otpReq.data.error || 'Could not send OTP');
+    if (!state.deleteOTP) {
+      setLoading('deleteBtn', true, 'Sending OTP...');
+      const otpReq = await api('POST', '/otp/send', {
+        purpose: 'delete_file',
+        file_id: fileId,
+      });
+
+      if (!otpReq.ok || !otpReq.data.success) {
+        showDeleteAlert(otpReq.data.error || 'Could not send OTP');
+        return;
+      }
+
+      state.deleteOTP = {
+        otp_id: otpReq.data.otp_id,
+        expires_in: otpReq.data.expires_in,
+        message: otpReq.data.message,
+      };
+
+      document.getElementById('deleteOtpGroup').classList.remove('hidden');
+      document.getElementById('deleteStepText').textContent =
+        otpReq.data.message || 'A one-time code has been sent to your email.';
+      document.getElementById('deleteOtpHint').textContent =
+        otpReq.data.expires_in
+          ? `Enter the 6-digit code from your email. It expires in ${Math.ceil(otpReq.data.expires_in / 60)} minute(s).`
+          : 'Enter the 6-digit code we sent to your email.';
+      setDeleteButtonLabel('Verify OTP & Delete');
+      document.getElementById('deleteOtpCode').focus();
       return;
     }
 
-    const otpCode = window.prompt(
-      `${otpReq.data.message || 'An OTP has been sent to your email.'}\nEnter the 6-digit code to confirm deletion:`
-    );
-    if (!otpCode) return;
+    if (!otpCode) {
+      showDeleteAlert('Enter the 6-digit OTP code to continue');
+      return;
+    }
+
+    setLoading('deleteBtn', true, 'Verifying OTP...');
 
     // Step 3: Verify OTP — receive download_token (used as delete authorisation)
     const verifyReq = await api('POST', '/otp/verify', {
-      otp_id:   otpReq.data.otp_id,
-      otp_code: otpCode.trim(),
+      otp_id:   state.deleteOTP.otp_id,
+      otp_code: otpCode,
     });
 
     if (!verifyReq.ok || !verifyReq.data.success) {
-      toast('error', 'Delete failed', verifyReq.data.error || 'OTP invalid');
+      showDeleteAlert(verifyReq.data.error || 'OTP invalid');
       return;
     }
 
     const deleteToken = verifyReq.data.download_token;
+    if (!deleteToken) throw new Error('No delete token received from server');
 
     // Step 4: Delete with token
+    setLoading('deleteBtn', true, 'Deleting...');
     const { ok, data } = await api(
       'DELETE',
       `/files/${fileId}`,
@@ -559,15 +617,16 @@ async function confirmDelete() {
     );
 
     if (ok && data.success) {
-      closeModal('deleteModal');
+      closeDeleteModal();
       toast('success', 'File deleted', data.message || 'File permanently removed.');
       loadFiles();
     } else {
-      toast('error', 'Delete failed', data.error || 'Please try again.');
+      showDeleteAlert(data.error || 'Please try again.');
     }
-  } catch {
-    toast('error', 'Delete failed', 'Network error.');
+  } catch (error) {
+    showDeleteAlert(error.message || 'Network error.');
+  } finally {
+    setLoading('deleteBtn', false);
+    setDeleteButtonLabel(state.deleteOTP ? 'Verify OTP & Delete' : '🗑 Delete Permanently');
   }
-
-  state.deleteTarget = null;
 }

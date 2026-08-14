@@ -15,10 +15,10 @@ SQLAlchemy 2.x: Model.query.get() → db.session.get()
 import uuid
 import logging
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
-from src.extensions import db
+from src.extensions import db, limiter
 from src.models.user import User
 from src.models.file import File
 from src.models.share import ShareRequest
@@ -31,6 +31,7 @@ otp_bp = Blueprint('otp', __name__)
 
 
 @otp_bp.route('/send', methods=['POST'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_OTP"])
 @jwt_required()
 def send_otp():
     err_id = uuid.uuid4().hex
@@ -95,6 +96,7 @@ def send_otp():
 
 
 @otp_bp.route('/verify', methods=['POST'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_OTP"])
 @jwt_required()
 def verify_otp():
     err_id = uuid.uuid4().hex
@@ -134,6 +136,7 @@ def verify_otp():
 
 
 @otp_bp.route('/resend/<int:otp_id>', methods=['POST'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_OTP"])
 @jwt_required()
 def resend_otp(otp_id):
     err_id = uuid.uuid4().hex

@@ -345,17 +345,25 @@ class MetricsCollector:
     
     @classmethod
     def get_latest_metrics(cls, limit=1):
-        """Get latest metrics for all types"""
+        """Get the most recent sample for each metric name, grouped by type."""
         result = {}
         metric_types = ['cpu', 'memory', 'disk', 'network', 'app', 'system', 'process']
         
         for metric_type in metric_types:
-            metrics = SystemMetric.query.filter_by(metric_type=metric_type)\
-                .order_by(SystemMetric.timestamp.desc())\
-                .limit(limit)\
+            latest_by_name = {}
+            metrics = (
+                SystemMetric.query
+                .filter_by(metric_type=metric_type)
+                .order_by(SystemMetric.timestamp.desc())
+                .limit(100)
                 .all()
-            
-            result[metric_type] = [m.to_dict() for m in metrics]
+            )
+
+            for metric in metrics:
+                if metric.metric_name not in latest_by_name:
+                    latest_by_name[metric.metric_name] = metric.to_dict()
+
+            result[metric_type] = list(latest_by_name.values())
         
         return result
     

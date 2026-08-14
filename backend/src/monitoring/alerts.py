@@ -3,7 +3,7 @@ Alert Management Service
 """
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from src.extensions import db
 from src.models.monitoring import AlertRule, AlertHistory, SystemMetric
 import logging
@@ -72,7 +72,7 @@ class AlertManager:
     def _evaluate_rule(cls, rule):
         """Evaluate a single alert rule"""
         # Get recent metrics
-        since = datetime.utcnow() - timedelta(seconds=rule.duration_seconds or 60)
+        since = datetime.now(timezone.utc) - timedelta(seconds=rule.duration_seconds or 60)
         
         metrics = SystemMetric.query.filter_by(
             metric_type=rule.metric_type,
@@ -156,7 +156,7 @@ class AlertManager:
         """Resolve an active alert"""
         try:
             alert.status = 'resolved'
-            alert.resolved_at = datetime.utcnow()
+            alert.resolved_at = datetime.now(timezone.utc)
             db.session.commit()
             
             # Emit resolution with null check
@@ -174,7 +174,7 @@ class AlertManager:
         try:
             from flask import current_app
             timeout = current_app.config.get('ALERT_STALE_TIMEOUT', 3600)  # 1 hour
-            cutoff = datetime.utcnow() - timedelta(seconds=timeout)
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout)
             
             stale_alerts = AlertHistory.query.filter_by(
                 status='firing'
@@ -184,7 +184,7 @@ class AlertManager:
             
             for alert in stale_alerts:
                 alert.status = 'resolved'
-                alert.resolved_at = datetime.utcnow()
+                alert.resolved_at = datetime.now(timezone.utc)
                 alert.message += " (automatically resolved - stale)"
             
             if stale_alerts:
@@ -303,11 +303,11 @@ class AlertManager:
     @classmethod
     def acknowledge_alert(cls, alert_id, user_id):
         """Acknowledge an alert"""
-        alert = AlertHistory.query.get(alert_id)
+        alert = db.session.get(AlertHistory, alert_id)
         if alert and alert.status == 'firing':
             alert.status = 'acknowledged'
             alert.acknowledged_by = user_id
-            alert.acknowledged_at = datetime.utcnow()
+            alert.acknowledged_at = datetime.now(timezone.utc)
             db.session.commit()
             
             # Emit acknowledgment with null check

@@ -15,10 +15,10 @@ import uuid
 import logging
 from typing import cast
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
-from src.extensions import db
+from src.extensions import db, limiter
 from src.models.user import User
 from src.models.log import Log
 from src.services.auth_service import AuthService
@@ -183,6 +183,7 @@ def check_email(email):
 
 
 @user_bp.route('/public-key/<username>', methods=['GET'])
+@limiter.limit(lambda: "20/minute")
 @jwt_required()
 def get_user_public_key(username):
     """
@@ -228,6 +229,7 @@ def get_user_public_key(username):
 
 
 @user_bp.route('/me/private-key', methods=['GET'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_OTP"])
 @jwt_required()
 def get_my_private_key():
     """

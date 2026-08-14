@@ -19,10 +19,11 @@ Changes from v4.0
 """
 import uuid
 import logging
+import time
 from datetime import datetime, timezone
 
 import redis as _redis
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import text
 
@@ -30,10 +31,10 @@ from config import get_config
 from src.extensions import db, jwt, cors, socketio, limiter
 from src.models.user import User
 from src.models.log import Log
-from src.models.monitoring import ErrorTracking
+from src.models.monitoring import ErrorTracking, ApiRequestLog
 from src.monitoring.metrics import MetricsCollector
 from src.monitoring.alerts import AlertManager
-from src.monitoring.middleware import MonitoringMiddleware, MetricsMiddleware
+from src.monitoring.middleware import MetricsMiddleware
 from src.routes.auth import auth_bp
 from src.routes.user import user_bp
 from src.routes.files import files_bp
@@ -90,12 +91,64 @@ app.register_blueprint(share_bp,      url_prefix='/api/share')
 app.register_blueprint(otp_bp,        url_prefix='/api/otp')
 app.register_blueprint(monitoring_bp)
 
+# ── Request monitoring ────────────────────────────────────────────────────────
+_SENSITIVE_QUERY_PARAMS = frozenset({'token', 'key', 'password', 'secret', 'api_key', 'apikey'})
+
+
+@app.before_request
+def begin_request_monitoring():
+    g.request_id = str(uuid.uuid4())
+    g.request_start_time = time.time()
+
+
+@app.after_request
+def log_api_request(response):
+    start_time = getattr(g, 'request_start_time', None)
+    if start_time is None:
+        return response
+
+    try:
+        from flask_jwt_extended import get_jwt_identity
+
+        user_id = None
+        try:
+            user_id = int(get_jwt_identity())
+        except Exception:
+            pass
+
+        safe_params = {
+            key: '***' if key.lower() in _SENSITIVE_QUERY_PARAMS else value
+            for key, value in request.args.items()
+        }
+
+        log = ApiRequestLog(
+            request_id=getattr(g, 'request_id', str(uuid.uuid4())),
+            user_id=user_id,
+            method=request.method,
+            endpoint=request.path,
+            query_params=str(safe_params),
+            status_code=response.status_code,
+            response_time=(time.time() - start_time) * 1000,
+            ip_address=request.remote_addr,
+            user_agent=request.user_agent.string if request.user_agent else None,
+            referer=request.referrer,
+        )
+        db.session.add(log)
+        db.session.commit()
+
+        socketio.emit('api_request', log.to_dict(), namespace='/monitoring')
+    except Exception as exc:
+        logger.error(f"Error saving API log: {exc}")
+        db.session.rollback()
+
+    return response
+
+
 # ── WSGI middleware stack (innermost applied first) ───────────────────────────
 # ProxyFix MUST be the innermost wrapper so it rewrites remote_addr / scheme
 # before any other middleware (or Flask) reads request.remote_addr.
 # Monitoring middleware then sees the already-corrected client IP.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-app.wsgi_app = MonitoringMiddleware(app.wsgi_app)
 app.wsgi_app = MetricsMiddleware(app.wsgi_app)
 
 # ════════════════════════════════════════════════════════════════════════════════

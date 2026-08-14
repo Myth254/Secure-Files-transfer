@@ -2,9 +2,14 @@
 Monitoring Models for Real-time System Monitoring
 """
 from src.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy import Index
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
+
 
 class SystemMetric(db.Model):
     """System performance metrics"""
@@ -18,7 +23,7 @@ class SystemMetric(db.Model):
     tags = db.Column(JSON)
     hostname = db.Column(db.String(255))
     environment = db.Column(db.String(50))
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    timestamp = db.Column(db.DateTime, default=_utcnow, index=True)
     
     __table_args__ = (
         Index('ix_metric_type_name_time', 'metric_type', 'metric_name', 'timestamp'),
@@ -69,8 +74,8 @@ class AlertRule(db.Model):
     
     # Metadata
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     
     # Relationships
     history = db.relationship('AlertHistory', backref='rule', lazy='dynamic', cascade='all, delete-orphan')
@@ -139,7 +144,7 @@ class AlertHistory(db.Model):
     tags = db.Column(JSON)
     
     # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
     
     # Relationships
     acknowledged_user = db.relationship('User', foreign_keys=[acknowledged_by])
@@ -192,8 +197,8 @@ class UserSession(db.Model):
     city = db.Column(db.String(100))
     
     # Session timing
-    login_time = db.Column(db.DateTime, default=datetime.utcnow)
-    last_activity = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    login_time = db.Column(db.DateTime, default=_utcnow)
+    last_activity = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     expires_at = db.Column(db.DateTime)
     
     # Session data
@@ -272,7 +277,7 @@ class ApiRequestLog(db.Model):
     parent_span_id = db.Column(db.String(36))
     
     # Timestamp
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, index=True)
     
     # Relationships
     user = db.relationship('User', backref='api_logs')
@@ -325,8 +330,8 @@ class DashboardConfig(db.Model):
     shared_with = db.Column(JSON)
     
     # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     
     # Relationships
     user = db.relationship('User', backref='dashboard_config')
@@ -380,8 +385,8 @@ class ScheduledReport(db.Model):
     last_error = db.Column(db.Text)
     
     # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     
     # Relationships
     user = db.relationship('User', backref='scheduled_reports')
@@ -426,8 +431,8 @@ class ErrorTracking(db.Model):
     
     # Frequency
     occurrences = db.Column(db.Integer, default=1)
-    first_seen = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    first_seen = db.Column(db.DateTime, default=_utcnow)
+    last_seen = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     resolved = db.Column(db.Boolean, default=False)
     resolved_at = db.Column(db.DateTime)
     resolved_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)

@@ -22,12 +22,12 @@ import uuid
 import logging
 from datetime import datetime, timezone
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import (
     create_access_token, jwt_required, get_jwt_identity, get_jwt,
 )
 
-from src.extensions import db, socketio
+from src.extensions import db, socketio, limiter
 from src.models.user import User
 from src.models.log import Log
 from src.services.auth_service import AuthService
@@ -80,6 +80,7 @@ def _redis_client():
 # ── register ──────────────────────────────────────────────────────────────────
 
 @auth_bp.route('/register', methods=['POST'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_REGISTER"])
 def register():
     """
     Register a new user.
@@ -142,6 +143,7 @@ def register():
 # ── login step 1 ──────────────────────────────────────────────────────────────
 
 @auth_bp.route('/login', methods=['POST'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_LOGIN"])
 def login():
     """
     Step 1 of 2FA: verify password and send OTP.
@@ -199,6 +201,7 @@ def login():
 # ── login step 2 ──────────────────────────────────────────────────────────────
 
 @auth_bp.route('/verify-login-otp', methods=['POST'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_OTP"])
 def verify_login_otp():
     """
     Step 2 of 2FA: verify OTP and issue JWT.
@@ -254,6 +257,7 @@ def verify_login_otp():
 # ── resend OTP ────────────────────────────────────────────────────────────────
 
 @auth_bp.route('/resend-login-otp', methods=['POST'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_OTP"])
 def resend_login_otp():
     """Resend login OTP for an existing otp_id. No user_id accepted from caller."""
     err_id = uuid.uuid4().hex
@@ -301,7 +305,7 @@ def logout():
 
         if jti and ttl > 0:
             try:
-                _redis_client().setex(f'jwt_blocklist:{jti}', ttl, 'revoked')
+                _redis_client().setex(f'jwt_blocklist:{jti}', ttl, 'revoked') # type: ignore
             except Exception as redis_err:
                 logger.error(f"[{err_id}] Redis blocklist write failed: {redis_err}")
 

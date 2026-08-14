@@ -22,15 +22,15 @@ import uuid
 import logging
 from datetime import datetime, timezone
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import cross_origin
 
-from src.extensions import db, socketio
+from src.extensions import db, socketio, limiter
 from src.models.log import Log
 from src.models.file import File
 from src.services.file_service import FileService
-from src.utils.exceptions import ValidationError, FileError
+from src.utils.exceptions import ValidationError, FileError, ShareExpiredError
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ def _log(user_id, action: str, details: str) -> None:
 # ── upload ────────────────────────────────────────────────────────────────────
 
 @files_bp.route('/upload', methods=['POST'])
+@limiter.limit(lambda: current_app.config["RATE_LIMIT_UPLOAD"])
 @jwt_required()
 def upload_file():
     """
@@ -158,6 +159,9 @@ def download_file(file_id):
         }, namespace='/monitoring')
         return jsonify({'success': True, 'file': file_data}), 200
 
+    except ShareExpiredError as known:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(known)}), 403
     except (ValidationError, FileError) as known:
         _log(user_id, 'download_failed', f'Failed download file id={file_id}: {known}')  # type: ignore[name-defined]
         try:
@@ -203,6 +207,9 @@ def get_file_content(file_id):
 
         return jsonify({'success': True, 'intent': intent, 'file': file_data}), 200
 
+    except ShareExpiredError as known:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(known)}), 403
     except (ValidationError, FileError) as known:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(known)}), 404

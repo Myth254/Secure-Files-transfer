@@ -27,7 +27,7 @@ from src.extensions import db
 from src.models.user import User
 from src.models.file import File
 from src.services.encryption_service import EncryptionService
-from src.utils.exceptions import FileError, ValidationError
+from src.utils.exceptions import FileError, ValidationError, ShareExpiredError
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,17 @@ def _detect_mime(file_obj) -> str:
         )
         file_obj.seek(0)
         return ''
+
+
+def _as_utc(value):
+    """Treat naive database datetimes as UTC so comparisons stay consistent."""
+    from datetime import timezone
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class FileService:
@@ -241,7 +252,7 @@ class FileService:
                 query = query.filter(File.filename.ilike(f"%{search}%"))
 
             query = query.order_by(File.upload_date.desc())
-            paginated = query.paginate(page=page, per_page=per_page, error_out=False)
+            paginated = query.paginate(page=page, per_page=per_page, error_out=False) # type: ignore
 
             files_list = [
                 {
@@ -343,6 +354,10 @@ class FileService:
 
             if not access:
                 raise ValidationError("File not found or unauthorised")
+
+            if access.share_request and access.share_request.expires_at:
+                if datetime.now(timezone.utc) > _as_utc(access.share_request.expires_at):
+                    raise ShareExpiredError("This share link has expired")
 
             if required_permission == 'download' and not access.can_download:
                 raise ValidationError("Download permission not granted")

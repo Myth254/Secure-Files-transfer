@@ -27,7 +27,7 @@ from src.models.file import File
 from src.models.share import ShareRequest, SharedAccess, ShareLog
 from src.services.file_service import FileService
 from src.services.share_service import ShareService
-from src.utils.exceptions import ValidationError, FileError
+from src.utils.exceptions import ValidationError, FileError, ShareExpiredError
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +245,9 @@ def download_shared_file(file_id):
 
         return jsonify({'success': True, 'file': file_data}), 200
 
+    except ShareExpiredError as known:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(known)}), 403
     except (ValidationError, FileError) as known:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(known)}), 403
@@ -299,6 +302,9 @@ def get_shared_file_content(file_id):
 
         return jsonify({'success': True, 'intent': intent, 'file': file_data}), 200
 
+    except ShareExpiredError as known:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(known)}), 403
     except (ValidationError, FileError) as known:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(known)}), 403

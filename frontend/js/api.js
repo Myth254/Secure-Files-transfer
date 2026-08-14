@@ -31,6 +31,7 @@ const state = {
   pendingOTP:      null,  // { otp_id, email, expires_in }
   pendingRegister: null,  // encrypted private key string after registration
   downloadOTP:     null,  // { otp_id, expires_in, message }
+  deleteOTP:       null,  // { otp_id, expires_in, message }
   fileActionMode:  'download', // 'view' | 'download'
 
   // Modal targets
@@ -40,6 +41,7 @@ const state = {
 
   // Polling
   metricsInterval: null,
+  monitoringSocket: null,
 };
 
 /* ════════════════════════════════════════

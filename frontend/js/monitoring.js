@@ -20,6 +20,7 @@
 function loadMonitoring() {
   refreshMetrics();
   loadAlertRules();
+  connectMonitoringSocket();
 }
 
 /* ════════════════════════════════════════
@@ -47,9 +48,21 @@ function getMetricColor(value, thresholds = { warn: 70, crit: 90 }) {
  * @param {{ warn, crit }} thresholds
  */
 function updateMetricCard(prefix, value, unit, thresholds) {
-  const valEl    = document.getElementById(`met${prefix}`);
-  const barEl    = document.getElementById(`met${prefix}Bar`);
-  const statusEl = document.getElementById(`met${prefix}Status`);
+  const ids = {
+    ResponseTime: {
+      value: 'metResponseTime',
+      bar: 'metResponseBar',
+      status: 'metResponseStatus',
+    },
+  };
+  const resolved = ids[prefix] || {
+    value: `met${prefix}`,
+    bar: `met${prefix}Bar`,
+    status: `met${prefix}Status`,
+  };
+  const valEl    = document.getElementById(resolved.value);
+  const barEl    = document.getElementById(resolved.bar);
+  const statusEl = document.getElementById(resolved.status);
   if (!valEl) return;
 
   const numVal = typeof value === 'number' ? value : parseFloat(value);
@@ -61,39 +74,56 @@ function updateMetricCard(prefix, value, unit, thresholds) {
   const pct   = unit === 'ms' ? Math.min(100, (numVal / 1000) * 100) : numVal;
   const color = getMetricColor(pct, thresholds);
 
-  barEl.style.width      = Math.max(0, Math.min(100, pct)) + '%';
-  barEl.style.background = color;
+  if (barEl) {
+    barEl.style.width      = Math.max(0, Math.min(100, pct)) + '%';
+    barEl.style.background = color;
+  }
 
   // Status dot colour mirrors bar
-  statusEl.style.background = color;
-  statusEl.style.boxShadow  = `0 0 6px ${color}`;
+  if (statusEl) {
+    statusEl.style.background = color;
+    statusEl.style.boxShadow  = `0 0 6px ${color}`;
+  }
 }
 
 /**
  * Fetch live metrics from the REST API and update all four cards.
- * Replace the simulated values below with real API calls once the
- * /monitoring/metrics endpoint is available.
  */
 async function refreshMetrics() {
-  /*
-   * TODO: Replace simulation with:
-   *   const { ok, data } = await api('GET', '/monitoring/metrics/current');
-   *   if (ok) { updateMetricCard('CPU', data.cpu_usage, '%', ...); ... }
-   */
+  const { ok, data } = await api('GET', '/monitoring/metrics/current');
+  if (!ok || !data.success) {
+    toast('error', 'Monitoring unavailable', data.error || 'Could not load live metrics');
+    return;
+  }
 
-  // ── Simulated live data (remove when wiring real API) ──
-  const cpu  = 15 + Math.random() * 35;
-  const mem  = 45 + Math.random() * 25;
-  const disk = 62 + Math.random() * 10;
-  const resp = 80 + Math.random() * 200;
+  const metrics = data.metrics || {};
+  const cpu  = getMetricValue(metrics, 'cpu', 'cpu_usage');
+  const mem  = getMetricValue(metrics, 'memory', 'usage');
+  const disk = getMetricValue(metrics, 'disk', 'usage');
+  const resp = getMetricValue(metrics, 'app', 'avg_response_time');
 
   updateMetricCard('CPU',          cpu,  '%',  { warn: 70, crit: 90 });
   updateMetricCard('Mem',          mem,  '%',  { warn: 80, crit: 95 });
   updateMetricCard('Disk',         disk, '%',  { warn: 80, crit: 90 });
   updateMetricCard('ResponseTime', resp, 'ms', { warn: 70, crit: 90 });
+  updateUptime(metrics);
 
   refreshApiStats();
   refreshActiveAlerts();
+}
+
+function getMetricValue(metrics, type, name) {
+  const item = (metrics[type] || []).find(metric => metric.name === name);
+  return item ? Number(item.value) : NaN;
+}
+
+function updateUptime(metrics) {
+  const uptimeHours = getMetricValue(metrics, 'system', 'uptime');
+  const uptimeEl = document.getElementById('uptimeDisplay');
+  if (!uptimeEl) return;
+  uptimeEl.textContent = Number.isFinite(uptimeHours)
+    ? `${Math.floor(uptimeHours)}h`
+    : '—';
 }
 
 /* ════════════════════════════════════════
@@ -102,14 +132,27 @@ async function refreshMetrics() {
 
 /**
  * Populate the API Activity panel on the right side of the page.
- * TODO: Replace simulation with a real /monitoring/stats endpoint.
  */
-function refreshApiStats() {
-  document.getElementById('apiTotal').textContent       = (Math.floor(Math.random() * 500) + 100).toLocaleString();
-  document.getElementById('apiErrorRate').textContent   = (Math.random() * 2).toFixed(2) + '%';
-  document.getElementById('activeSessions').textContent = Math.floor(Math.random() * 15) + 1;
-  document.getElementById('uptimeDisplay').textContent  = '99.98%';
-  document.getElementById('failedLogins').textContent   = Math.floor(Math.random() * 5);
+async function refreshApiStats() {
+  const [apiStats, sessionStats] = await Promise.all([
+    api('GET', '/monitoring/api-logs/summary?hours=24'),
+    api('GET', '/monitoring/sessions/stats'),
+  ]);
+
+  if (apiStats.ok && apiStats.data.success) {
+    const summary = apiStats.data.summary || {};
+    document.getElementById('apiTotal').textContent =
+      Number(summary.total_requests || 0).toLocaleString();
+    document.getElementById('apiErrorRate').textContent =
+      `${Number(summary.error_rate || 0).toFixed(2)}%`;
+  }
+
+  if (sessionStats.ok && sessionStats.data.success) {
+    document.getElementById('activeSessions').textContent =
+      Number(sessionStats.data.stats?.total_active || 0).toLocaleString();
+  }
+
+  document.getElementById('failedLogins').textContent = '—';
 }
 
 /* ════════════════════════════════════════
@@ -171,7 +214,7 @@ function renderActiveAlerts(alerts = []) {
  */
 async function acknowledgeAlert(alertId) {
   try {
-    await api('POST', `/monitoring/alerts/${alertId}/acknowledge`);
+    await api('POST', `/monitoring/alerts/history/${alertId}/acknowledge`);
     toast('info', 'Alert acknowledged');
     refreshMetrics();
   } catch {
@@ -185,7 +228,7 @@ async function acknowledgeAlert(alertId) {
  */
 async function refreshActiveAlerts() {
   try {
-    const { ok, data } = await api('GET', '/monitoring/alerts/active');
+    const { ok, data } = await api('GET', '/monitoring/alerts/history/active');
     renderActiveAlerts(ok && data.alerts ? data.alerts : []);
   } catch {
     renderActiveAlerts([]);
@@ -197,48 +240,67 @@ async function refreshActiveAlerts() {
 ════════════════════════════════════════ */
 
 /**
- * Load alert rules from config and render them in the table.
- * TODO: Replace hardcoded rules with GET /monitoring/alert-rules.
+ * Load alert rules from the monitoring API and render them in the table.
  */
-function loadAlertRules() {
-  // Default rules matching init_monitoring.py / config.py thresholds
-  const rules = [
-    { name: 'High CPU Usage',     metric: 'cpu_usage',         condition: '> 80%',  threshold: '80%',   severity: 'warning',  enabled: true  },
-    { name: 'Critical CPU',       metric: 'cpu_usage',         condition: '> 95%',  threshold: '95%',   severity: 'critical', enabled: true  },
-    { name: 'High Memory',        metric: 'memory_usage',      condition: '> 85%',  threshold: '85%',   severity: 'warning',  enabled: true  },
-    { name: 'Low Disk Space',     metric: 'disk_usage',        condition: '> 90%',  threshold: '90%',   severity: 'critical', enabled: true  },
-    { name: 'Slow API Response',  metric: 'avg_response_time', condition: '> 500ms',threshold: '500ms', severity: 'warning',  enabled: true  },
-    { name: 'High Error Rate',    metric: 'error_rate',        condition: '> 5%',   threshold: '5%',    severity: 'critical', enabled: true  },
-    { name: 'Failed Logins',      metric: 'failed_logins',     condition: '> 10',   threshold: '10',    severity: 'warning',  enabled: true  },
-    { name: 'No Active Users',    metric: 'active_sessions',   condition: '= 0',    threshold: '0',     severity: 'warning',  enabled: false },
-  ];
-
+async function loadAlertRules() {
   const tbody = document.getElementById('alertRulesBody');
+  const { ok, data } = await api('GET', '/monitoring/alerts/rules');
+  const rules = ok && data.success ? data.rules : [];
 
-  tbody.innerHTML = rules.map(r => `
+  if (!rules.length) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="6" class="table-empty">
+          <div class="table-empty-text">No alert rules configured</div>
+        </td>
+      </tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rules.map(rule => {
+    const condition = formatAlertCondition(rule);
+    return `
     <tr>
-      <td class="primary">${escHtml(r.name)}</td>
+      <td class="primary">${escHtml(rule.name)}</td>
       <td>
-        <span class="font-mono text-xs" style="color:var(--navy-200)">${escHtml(r.metric)}</span>
+        <span class="font-mono text-xs" style="color:var(--navy-200)">${escHtml(rule.metric_name)}</span>
       </td>
       <td>
-        <span class="font-mono text-xs">${escHtml(r.condition)}</span>
+        <span class="font-mono text-xs">${escHtml(condition)}</span>
       </td>
       <td>
-        <span class="font-mono text-xs">${escHtml(r.threshold)}</span>
+        <span class="font-mono text-xs">${escHtml(String(rule.threshold_value ?? '—'))}</span>
       </td>
       <td>
-        <span class="badge ${r.severity === 'critical' ? 'badge-red' : 'badge-amber'}">
-          ${r.severity}
+        <span class="badge ${rule.severity === 'critical' ? 'badge-red' : 'badge-amber'}">
+          ${escHtml(rule.severity)}
         </span>
       </td>
       <td>
-        <span class="badge ${r.enabled ? 'badge-green' : 'badge-gray'}">
-          ${r.enabled ? '✓ Enabled' : '○ Disabled'}
+        <span class="badge ${rule.enabled ? 'badge-green' : 'badge-gray'}">
+          ${rule.enabled ? '✓ Enabled' : '○ Disabled'}
         </span>
       </td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
+}
+
+function formatAlertCondition(rule) {
+  const op = {
+    gt: '>',
+    gte: '>=',
+    lt: '<',
+    lte: '<=',
+    eq: '=',
+    ne: '!=',
+    between: 'between',
+  }[rule.alert_condition] || rule.alert_condition || '—';
+
+  if (op === 'between') {
+    return `${op} ${rule.threshold_value ?? '—'} and ${rule.threshold_max ?? '—'}`;
+  }
+  return `${op} ${rule.threshold_value ?? '—'}`;
 }
 
 /* ════════════════════════════════════════
@@ -257,6 +319,10 @@ function stopMetricsPolling() {
     clearInterval(state.metricsInterval);
     state.metricsInterval = null;
   }
+  if (state.monitoringSocket) {
+    state.monitoringSocket.disconnect();
+    state.monitoringSocket = null;
+  }
 }
 
 /* ════════════════════════════════════════
@@ -264,10 +330,11 @@ function stopMetricsPolling() {
    Wire up when the backend /monitoring namespace is reachable.
 ════════════════════════════════════════ */
 
-/*
 function connectMonitoringSocket() {
+  if (state.monitoringSocket || typeof io !== 'function' || !state.token) return state.monitoringSocket;
+
   const socket = io('/monitoring', {
-    auth: { token: state.token },
+    query: { token: state.token },
     transports: ['websocket'],
   });
 
@@ -275,18 +342,22 @@ function connectMonitoringSocket() {
     socket.emit('subscribe', { metrics: ['cpu', 'memory', 'disk', 'response_time'] });
   });
 
-  socket.on('metric_update', (data) => {
-    updateMetricCard('CPU',          data.cpu_usage,        '%',  { warn:70, crit:90 });
-    updateMetricCard('Mem',          data.memory_usage,     '%',  { warn:80, crit:95 });
-    updateMetricCard('Disk',         data.disk_usage,       '%',  { warn:80, crit:90 });
-    updateMetricCard('ResponseTime', data.avg_response_ms,  'ms', { warn:70, crit:90 });
+  socket.on('metrics_update', (metrics) => {
+    updateMetricCard('CPU',          getMetricValue(metrics, 'cpu', 'cpu_usage'),          '%',  { warn:70, crit:90 });
+    updateMetricCard('Mem',          getMetricValue(metrics, 'memory', 'usage'),           '%',  { warn:80, crit:95 });
+    updateMetricCard('Disk',         getMetricValue(metrics, 'disk', 'usage'),             '%',  { warn:80, crit:90 });
+    updateMetricCard('ResponseTime', getMetricValue(metrics, 'app', 'avg_response_time'),  'ms', { warn:70, crit:90 });
+    updateUptime(metrics);
   });
 
   socket.on('alert_triggered', () => refreshActiveAlerts());
   socket.on('alert_resolved',  () => refreshActiveAlerts());
 
-  socket.on('disconnect', () => console.warn('Monitoring socket disconnected'));
+  socket.on('disconnect', () => {
+    console.warn('Monitoring socket disconnected');
+    state.monitoringSocket = null;
+  });
 
+  state.monitoringSocket = socket;
   return socket;
 }
-*/
